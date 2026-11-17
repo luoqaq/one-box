@@ -259,6 +259,16 @@ final class WindowRouter {
         }
         Task { @MainActor in
             do {
+                // 未授权时先触发系统原生授权弹窗（点「打开系统设置」可直达且 OneBox 已在列表中）。
+                // 用户拒绝或未完成授权时，落到配置页横幅引导；授权后需重启应用生效。
+                if !model.captureService.authorizationStatus() {
+                    guard await model.captureService.requestAccess() else {
+                        model.showToast("需要屏幕录制权限：系统设置 > 隐私与安全性 > 屏幕录制")
+                        showScreenshotsWindow(initialSubView: .config)
+                        return
+                    }
+                    model.showToast("屏幕录制权限已开启，若仍无法截图请重启 OneBox")
+                }
                 let outcome = try await model.captureService.requestSelectionCapture(defaultAction: defaultAction)
                 switch outcome {
                 case .canceled:
