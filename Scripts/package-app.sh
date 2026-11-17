@@ -32,6 +32,11 @@ mkdir -p "$MACOS" "$RESOURCES"
 
 cp "$BIN" "$MACOS/$APP_NAME"
 
+# 应用图标（Resources/AppIcon.icns 由 Scripts/gen-icon.swift 生成）
+if [ -f "$REPO_ROOT/Resources/AppIcon.icns" ]; then
+    cp "$REPO_ROOT/Resources/AppIcon.icns" "$RESOURCES/AppIcon.icns"
+fi
+
 cat > "$CONTENTS/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -53,8 +58,8 @@ cat > "$CONTENTS/Info.plist" <<PLIST
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
     <string>15.2</string>
-    <key>LSUIElement</key>
-    <true/>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSSupportsAutomaticTermination</key>
