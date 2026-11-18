@@ -8,16 +8,19 @@ let package = Package(
         .executable(name: "OneBox", targets: ["AppTarget"])
     ],
     targets: [
+        .target(name: "HotKeys"),
         .target(name: "ToolRegistry"),
         .target(name: "ClipboardStore"),
         .target(name: "CaptureStore"),
         .target(name: "ClipboardHistory", dependencies: ["ClipboardStore"]),
         .target(name: "Annotation"),
-        .target(name: "ScreenCapture"),
+        .target(name: "ScreenCapture", dependencies: ["Annotation"]),
+        .target(name: "ColorPicker"),
         .target(name: "ToolLauncherUI", dependencies: ["ToolRegistry"]),
         .target(
             name: "OneBoxUI",
             dependencies: [
+                "HotKeys",
                 "ToolRegistry",
                 "ToolLauncherUI",
                 "ClipboardHistory",
@@ -25,11 +28,13 @@ let package = Package(
                 "CaptureStore",
                 "ScreenCapture",
                 "Annotation",
+                "ColorPicker",
             ]
         ),
         .executableTarget(
             name: "AppTarget",
             dependencies: [
+                "HotKeys",
                 "ToolRegistry",
                 "ToolLauncherUI",
                 "OneBoxUI",
@@ -38,13 +43,16 @@ let package = Package(
                 "CaptureStore",
                 "ScreenCapture",
                 "Annotation",
+                "ColorPicker",
             ]
         ),
+        .testTarget(name: "HotKeysTests", dependencies: ["HotKeys"]),
         .testTarget(name: "ClipboardStoreTests", dependencies: ["ClipboardStore"]),
         .testTarget(name: "CaptureStoreTests", dependencies: ["CaptureStore"]),
         .testTarget(name: "ClipboardHistoryTests", dependencies: ["ClipboardHistory"]),
         .testTarget(name: "AnnotationTests", dependencies: ["Annotation"]),
         .testTarget(name: "ScreenCaptureTests", dependencies: ["ScreenCapture"]),
+        .testTarget(name: "ColorPickerTests", dependencies: ["ColorPicker"]),
     ],
     swiftLanguageModes: [.v5]
 )

@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import Testing
 import ToolRegistry
@@ -20,9 +21,9 @@ struct ToolRegistryTests {
         #expect(registry.isEnabled("clipboard"))
         #expect(registry.isEnabled("screenshots"))
         #expect(!registry.isEnabled("color-picker"))
-        #expect(!registry.isEnabled("file-stash")) // 规划中永远不可启用
+        #expect(registry.builtinTools.map(\.id) == ["clipboard", "screenshots", "color-picker"])
         #expect(registry.enabledCount == 2)
-        #expect(registry.disabledCount == 3)
+        #expect(registry.disabledCount == 1)
     }
 
     @Test("拼音简拼与全拼搜索命中")
@@ -31,21 +32,21 @@ struct ToolRegistryTests {
         #expect(registry.search("jtb").map(\.id) == ["clipboard"])       // 剪贴板简拼
         #expect(registry.search("jt").contains { $0.id == "screenshots" }) // 截图简拼
         #expect(registry.search("截图").contains { $0.id == "screenshots" })
-        #expect(registry.search("二维码").contains { $0.id == "qr-code" })
+        #expect(registry.search("取色").contains { $0.id == "color-picker" })
         #expect(registry.search("bucunzai").isEmpty)
     }
 
     @Test("置顶隐含启用，停用取消置顶")
     func pinEnableSemantics() {
         let registry = ToolRegistry(defaults: makeDefaults())
-        registry.setEnabled("text-tools", false)
-        registry.togglePinned("text-tools")
-        #expect(registry.isEnabled("text-tools"))
-        #expect(registry.state(of: registry.tool(id: "text-tools")!).pinned)
+        registry.setEnabled("color-picker", false)
+        registry.togglePinned("color-picker")
+        #expect(registry.isEnabled("color-picker"))
+        #expect(registry.state(of: registry.tool(id: "color-picker")!).pinned)
 
-        registry.setEnabled("text-tools", false)
-        #expect(!registry.state(of: registry.tool(id: "text-tools")!).pinned)
-        #expect(!registry.isEnabled("text-tools"))
+        registry.setEnabled("color-picker", false)
+        #expect(!registry.state(of: registry.tool(id: "color-picker")!).pinned)
+        #expect(!registry.isEnabled("color-picker"))
     }
 
     @Test("置顶序列内上下移与拖拽交换")
@@ -61,12 +62,23 @@ struct ToolRegistryTests {
         #expect(registry.pinnedTools().map(\.id) == ["clipboard", "screenshots"])
     }
 
+    @Test("上下移发布 states，供 UI 观察刷新")
+    func movePinnedPublishes() {
+        let registry = ToolRegistry(defaults: makeDefaults())
+        var emissions = 0
+        let sub = registry.$states.dropFirst().sink { _ in emissions += 1 }
+        registry.movePinned("screenshots", offset: -1)
+        #expect(emissions >= 1)
+        #expect(registry.pinnedTools().map(\.id) == ["screenshots", "clipboard"])
+        _ = sub
+    }
+
     @Test("置顶优先排序 + 状态过滤")
     func filterAndSort() {
         let registry = ToolRegistry(defaults: makeDefaults())
         let disabled = registry.filteredTools(filter: .disabled, search: "", sortMode: .pinned, showInactive: true)
         #expect(disabled.allSatisfy { registry.availability(of: $0) == .disabled })
-        #expect(disabled.count == 3)
+        #expect(disabled.count == 1)
 
         let enabled = registry.filteredTools(filter: .enabled, search: "", sortMode: .frequent, showInactive: true)
         #expect(enabled.count == 2)
@@ -83,13 +95,27 @@ struct ToolRegistryTests {
         d.removePersistentDomain(forName: suite)
 
         let first = ToolRegistry(defaults: d)
-        first.togglePinned("qr-code")
+        first.togglePinned("color-picker")
         first.registerUse("clipboard")
         first.registerUse("clipboard")
 
         let second = ToolRegistry(defaults: d)
-        #expect(second.isEnabled("qr-code"))
-        #expect(second.state(of: second.tool(id: "qr-code")!).pinned)
+        #expect(second.isEnabled("color-picker"))
+        #expect(second.state(of: second.tool(id: "color-picker")!).pinned)
         #expect(second.state(of: second.tool(id: "clipboard")!).uses == 2)
+    }
+
+    @Test("工具图标颜色定义符合浅色透明规范且剪贴板颜色匹配")
+    func toolColors() {
+        let registry = ToolRegistry(defaults: makeDefaults())
+        let clipboard = registry.tool(id: "clipboard")!
+        #expect(clipboard.fgHex == "#007aff")
+        #expect(clipboard.bgHex == "#007aff1c")
+
+        for tool in registry.builtinTools {
+            #expect(tool.fgHex.hasPrefix("#"))
+            #expect(tool.bgHex.hasPrefix("#"))
+            #expect(tool.bgHex.count == 9) // #RRGGBBAA
+        }
     }
 }

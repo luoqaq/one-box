@@ -1,6 +1,8 @@
 #!/bin/bash
-# OneBox .app 打包脚本：SwiftPM release 构建 + Info.plist + ad-hoc 签名。
+# OneBox .app 打包脚本：SwiftPM release 构建 + Info.plist + 稳定本机签名。
 # 用法：./Scripts/package-app.sh [输出目录]（默认 Scripts/build）
+# 签名用 Scripts/ensure-codesign-identity.sh 维护的「OneBox Local」，避免 ad-hoc
+# 每次重打包 CDHash 变化导致屏幕录制 TCC 失效。
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -10,6 +12,7 @@ BUNDLE_ID="com.onebox.app"
 SDK_ROOT="${SDKROOT:-/Library/Developer/CommandLineTools/SDKs/MacOSX15.2.sdk}"
 # 强制用 CLT 工具链：避免 xcode-select 指向未同意 license 的 Xcode。
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Library/Developer/CommandLineTools}"
+CODESIGN_IDENTITY="${ONEBOX_CODESIGN_IDENTITY:-}"
 
 # 1) SwiftPM release 构建（必须用 15.2 SDK：默认 27 SDK 的 SwiftUI @State 宏在纯 CLT 下缺插件）。
 cd "$REPO_ROOT"
@@ -32,9 +35,16 @@ mkdir -p "$MACOS" "$RESOURCES"
 
 cp "$BIN" "$MACOS/$APP_NAME"
 
-# 应用图标（Resources/AppIcon.icns 由 Scripts/gen-icon.swift 生成）
+# 应用图标（Resources/AppIcon.icns 由 Scripts/gen-icon.sh 从方案 A SVG 生成）
 if [ -f "$REPO_ROOT/Resources/AppIcon.icns" ]; then
     cp "$REPO_ROOT/Resources/AppIcon.icns" "$RESOURCES/AppIcon.icns"
+fi
+# 菜单栏模板图标
+if [ -f "$REPO_ROOT/Resources/MenuBarIcon.png" ]; then
+    cp "$REPO_ROOT/Resources/MenuBarIcon.png" "$RESOURCES/MenuBarIcon.png"
+fi
+if [ -f "$REPO_ROOT/Resources/MenuBarIcon@2x.png" ]; then
+    cp "$REPO_ROOT/Resources/MenuBarIcon@2x.png" "$RESOURCES/MenuBarIcon@2x.png"
 fi
 
 cat > "$CONTENTS/Info.plist" <<PLIST
@@ -45,7 +55,7 @@ cat > "$CONTENTS/Info.plist" <<PLIST
     <key>CFBundleName</key>
     <string>OneBox</string>
     <key>CFBundleDisplayName</key>
-    <string>OneBox</string>
+    <string>OneBox 百宝袋</string>
     <key>CFBundleIdentifier</key>
     <string>$BUNDLE_ID</string>
     <key>CFBundleExecutable</key>
@@ -70,9 +80,13 @@ cat > "$CONTENTS/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# 3) ad-hoc 签名（本机直接运行）。
-echo "==> codesign (ad-hoc)"
-codesign --force --deep --sign - "$APP_ROOT"
+# 3) 稳定本机签名（固定身份，屏幕录制授权可跨重打包保留）。
+if [[ -z "$CODESIGN_IDENTITY" ]]; then
+  CODESIGN_IDENTITY="$("$REPO_ROOT/Scripts/ensure-codesign-identity.sh")"
+fi
+echo "==> codesign ($CODESIGN_IDENTITY)"
+codesign --force --deep --sign "$CODESIGN_IDENTITY" "$APP_ROOT"
+codesign --verify --verbose "$APP_ROOT" >/dev/null
 
 echo "==> 完成：$APP_ROOT"
 echo "    双击运行或 open \"$APP_ROOT\""

@@ -137,10 +137,47 @@ struct AnnotationTests {
             annotation = Annotation(kind: .text, rect: CGRect(x: 5, y: 5, width: 60, height: 20), text: "Hello OneBox", fontSize: 13)
         case .mosaic:
             annotation = Annotation(kind: .mosaic, rect: CGRect(x: 10, y: 10, width: 40, height: 40))
+        case .line:
+            annotation = Annotation(
+                kind: .line,
+                rect: CGRect(x: 10, y: 20, width: 50, height: 1),
+                startPoint: CGPoint(x: 10, y: 20),
+                endPoint: CGPoint(x: 60, y: 20),
+                strokeWidth: 3
+            )
         }
         let rendered = try AnnotationRenderer.render(base: base, annotations: [annotation])
         #expect(rendered.width == 80)
         #expect(rendered.height == 60)
+    }
+
+    // MARK: - 直线
+
+    @Test func lineDrawsStrokeAlongEndpoints() throws {
+        let base = whiteImage(width: 100, height: 80)
+        let annotation = Annotation(
+            kind: .line,
+            rect: CGRect(x: 10, y: 28, width: 70, height: 5),
+            startPoint: CGPoint(x: 10, y: 30),
+            endPoint: CGPoint(x: 80, y: 30),
+            color: .red,
+            strokeWidth: 5
+        )
+        let rendered = try AnnotationRenderer.render(base: base, annotations: [annotation])
+        let pixels = rgbaPixels(of: rendered)
+        assertSimilar(pixel(40, 30, in: pixels, width: 100), (1, 69.0 / 255.0, 58.0 / 255.0, 1))
+        assertSimilar(pixel(5, 70, in: pixels, width: 100), (1, 1, 1, 1))
+    }
+
+    @Test func lineSkippedWhenEndpointsMissingOrEqual() throws {
+        let base = whiteImage(width: 40, height: 40)
+        let invalid: [Annotation] = [
+            Annotation(kind: .line, rect: CGRect(x: 0, y: 0, width: 10, height: 10)),
+            Annotation(kind: .line, rect: CGRect(x: 0, y: 0, width: 10, height: 10),
+                       startPoint: CGPoint(x: 5, y: 5), endPoint: CGPoint(x: 5, y: 5)),
+        ]
+        let rendered = try AnnotationRenderer.render(base: base, annotations: invalid)
+        #expect(rgbaPixels(of: rendered) == rgbaPixels(of: base))
     }
 
     // MARK: - 矩形
@@ -197,6 +234,23 @@ struct AnnotationTests {
         assertSimilar(pixel(70, 30, in: pixels, width: 100), (1, 69.0 / 255.0, 58.0 / 255.0, 1))
         // 远离箭头的位置不受影响。
         assertSimilar(pixel(5, 70, in: pixels, width: 100), (1, 1, 1, 1))
+        // 尖端前方（x = 83）保持白底，确认圆头箭杆不会突出尖端之外。
+        assertSimilar(pixel(83, 30, in: pixels, width: 100), (1, 1, 1, 1))
+    }
+
+    @Test func arrowGeometryScalesDownForShortSegments() {
+        let short = AnnotationArrowGeometry(
+            from: CGPoint(x: 0, y: 0),
+            to: CGPoint(x: 8, y: 0),
+            strokeWidth: 6
+        )
+        #expect(short != nil)
+        if let short {
+            #expect(short.shaftEnd.x > 0 && short.shaftEnd.x < short.tip.x)
+            #expect(short.neck.x > 0 && short.neck.x < short.tip.x)
+            #expect(short.leftWing.x > 0 && short.leftWing.x < short.neck.x)
+        }
+        #expect(AnnotationArrowGeometry(from: CGPoint(x: 5, y: 5), to: CGPoint(x: 5, y: 5), strokeWidth: 4) == nil)
     }
 
     // MARK: - 文字
@@ -232,9 +286,18 @@ struct AnnotationTests {
 
     // MARK: - 打码
 
+    @Test func mosaicBlockSizeFollowsStrokeWidth() {
+        let fine = Annotation(kind: .mosaic, rect: CGRect(x: 0, y: 0, width: 20, height: 20), strokeWidth: 6)
+        let coarse = Annotation(kind: .mosaic, rect: CGRect(x: 0, y: 0, width: 20, height: 20), strokeWidth: 24)
+        #expect(AnnotationRenderer.mosaicBlockSize(for: fine) == 6)
+        #expect(AnnotationRenderer.mosaicBlockSize(for: coarse) == 24)
+        let tiny = Annotation(kind: .mosaic, rect: CGRect(x: 0, y: 0, width: 20, height: 20), strokeWidth: 1)
+        #expect(AnnotationRenderer.mosaicBlockSize(for: tiny) == 4)
+    }
+
     @Test func mosaicChangesRegionButKeepsSurroundings() throws {
         let base = gradientImage(width: 60, height: 60)
-        let annotation = Annotation(kind: .mosaic, rect: CGRect(x: 10, y: 10, width: 30, height: 30))
+        let annotation = Annotation(kind: .mosaic, rect: CGRect(x: 10, y: 10, width: 30, height: 30), strokeWidth: 12)
         let rendered = try AnnotationRenderer.render(base: base, annotations: [annotation])
         let before = rgbaPixels(of: base)
         let after = rgbaPixels(of: rendered)
@@ -275,7 +338,7 @@ struct AnnotationTests {
             color: AnnotationColor(r: 0, g: 0, b: 0),
             strokeWidth: 60
         )
-        let mosaic = Annotation(kind: .mosaic, rect: CGRect(x: 12, y: 12, width: 36, height: 16))
+        let mosaic = Annotation(kind: .mosaic, rect: CGRect(x: 12, y: 12, width: 36, height: 16), strokeWidth: 12)
         let rendered = try AnnotationRenderer.render(base: base, annotations: [cover, mosaic])
         let pixels = rgbaPixels(of: rendered)
 

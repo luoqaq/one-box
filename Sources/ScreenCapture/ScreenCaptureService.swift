@@ -35,31 +35,42 @@ public final class ScreenCaptureService {
 
     // MARK: - 选区捕获
 
-    /// 全屏选区：所有显示器建遮罩窗口，拖拽框选，Esc 取消，Enter 确认（defaultAction），
-    /// 操作 dock 提供标注/复制/保存/取消四个按钮；完成后按选区捕获返回。
-    public func requestSelectionCapture(defaultAction: SelectionAction) async throws -> SelectionOutcome {
+    /// 全屏选区：框选后原地贴图标注；对号确认返回最终图，叉/Esc 取消。
+    public func requestSelectionCapture() async throws -> SelectionOutcome {
         guard authorizationStatus() else {
             throw ScreenCaptureError.notAuthorized
         }
-        let completion = await SelectionOverlayController.run(defaultAction: defaultAction)
+        let completion = await SelectionOverlayController.run { [weak self] rect, excludeIDs in
+            guard let self else { throw ScreenCaptureError.captureFailed("截图服务已释放") }
+            return try await self.capture(globalRect: rect, excludingWindowIDs: excludeIDs)
+        }
         switch completion {
         case .canceled:
             return .canceled
-        case .confirmed(let rect, let action):
-            // 小于最小选区视为无效，按取消处理（正常路径下遮罩已拦截）
-            guard rect.width >= SelectionOverlayController.minimumSelectionSize,
-                  rect.height >= SelectionOverlayController.minimumSelectionSize else {
-                return .canceled
-            }
-            let captured = try await capture(globalRect: rect)
-            return .selected(captured, action: action)
+        case .confirmed(let captured):
+            return .selected(captured)
+        }
+    }
+
+    /// 对已有截图进入贴图标注（工作台「继续标注」）。
+    public func requestAnnotate(captured: CapturedImage) async -> SelectionOutcome {
+        let completion = await SelectionOverlayController.runAnnotate(captured: captured)
+        switch completion {
+        case .canceled:
+            return .canceled
+        case .confirmed(let result):
+            return .selected(result)
         }
     }
 
     // MARK: - 矩形捕获
 
     /// 直接按全局 point 矩形捕获；跨屏选区按显示器拆分捕获再按 pixel 比例裁剪合并。
-    public func capture(globalRect: CGRect) async throws -> CapturedImage {
+    /// `excludingWindowIDs`：本 App 遮罩窗的 CGWindowID，滤镜排除后无需 orderOut，避免画面跳变。
+    public func capture(
+        globalRect: CGRect,
+        excludingWindowIDs: [CGWindowID] = []
+    ) async throws -> CapturedImage {
         guard authorizationStatus() else {
             throw ScreenCaptureError.notAuthorized
         }
@@ -95,7 +106,8 @@ public final class ScreenCaptureService {
             let image = try await capturePart(
                 screen: screen,
                 localRect: part.localRect,
-                primaryFrame: primaryFrame
+                primaryFrame: primaryFrame,
+                excludingWindowIDs: excludingWindowIDs
             )
             let partGlobal = part.localRect.offsetBy(dx: screen.frame.minX, dy: screen.frame.minY)
             subImages.append((partGlobal, image))
@@ -125,22 +137,50 @@ public final class ScreenCaptureService {
     private func capturePart(
         screen: ScreenInfo,
         localRect: CGRect,
-        primaryFrame: CGRect
+        primaryFrame: CGRect,
+        excludingWindowIDs: [CGWindowID]
     ) async throws -> CGImage {
-        if let image = try? await captureScreenKit(screen: screen, localRect: localRect) {
+        if let image = try? await captureScreenKit(
+            screen: screen,
+            localRect: localRect,
+            excludingWindowIDs: excludingWindowIDs
+        ) {
             return image
+        }
+        // 回退矩形接口无法按窗排除；有遮罩 ID 时不要走它，否则会截进半透明层。
+        guard excludingWindowIDs.isEmpty else {
+            throw ScreenCaptureError.captureFailed("带遮罩排除的 ScreenCaptureKit 捕获失败")
         }
         return try await captureScreenKitRect(screen: screen, localRect: localRect, primaryFrame: primaryFrame)
     }
     /// ScreenCaptureKit 主路径：SCShareableContent 取显示器，SCScreenshotManager 整屏捕获后裁剪。
-    private func captureScreenKit(screen: ScreenInfo, localRect: CGRect) async throws -> CGImage {
+    private func captureScreenKit(
+        screen: ScreenInfo,
+        localRect: CGRect,
+        excludingWindowIDs: [CGWindowID]
+    ) async throws -> CGImage {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
         guard let display = content.displays.first(where: { $0.displayID == screen.displayID }) else {
             throw ScreenCaptureError.captureFailed("找不到 displayID \(screen.displayID) 对应的显示器")
         }
-        let filter = SCContentFilter(display: display, excludingWindows: [])
+        let matchedIDs = Set(
+            ScreenCaptureExclusion.resolveWindowIDs(
+                requested: excludingWindowIDs,
+                available: content.windows.map(\.windowID)
+            )
+        )
+        let excluded = content.windows.filter { matchedIDs.contains($0.windowID) }
+        let filter = SCContentFilter(display: display, excludingWindows: excluded)
         let configuration = SCStreamConfiguration()
         configuration.showsCursor = false
+        // 默认 1920×1080；不设满屏原生像素时 Retina 会被系统降采样，看起来糊。
+        let output = ScreenGeometry.streamOutputPixelSize(
+            contentRect: filter.contentRect,
+            pointPixelScale: CGFloat(filter.pointPixelScale)
+        )
+        configuration.width = output.width
+        configuration.height = output.height
+        configuration.captureResolution = .best
         let fullImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
 
         // 按实际输出像素换算裁剪矩形（不信任整数 backingScale，避免 HiDPI 精度差异）
@@ -184,8 +224,9 @@ public final class ScreenCaptureService {
     // MARK: - 合成与编码
 
     /// 把各屏子图合成到一张与全局像素尺寸一致的画布。
-    /// 画布与捕获图像同为左上原点的行序，因此把 CG 上下文翻转后按左上坐标绘制。
-    private static func composite(
+    /// destRect 使用与 AppKit 一致的左下原点；不翻转 CTM——`CGContext.draw` 已按
+    /// 「图像底边落在 dest 原点、沿 +Y 铺开」绘制，再翻一次会把像素上下颠倒。
+    static func composite(
         subImages: [(globalRect: CGRect, image: CGImage)],
         selectionRect: CGRect,
         canvasSize: CGSize,
@@ -204,14 +245,13 @@ public final class ScreenCaptureService {
             space: colorSpace,
             bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
         ) else { return nil }
-        context.translateBy(x: 0, y: CGFloat(height))
-        context.scaleBy(x: 1, y: -1)
-        context.interpolationQuality = .high
+        // 子图应按 1:1 像素落画布；用 none 避免误缩放时被双线性抹糊。
+        context.interpolationQuality = .none
         for sub in subImages {
-            // 子图在选区内的左上原点 point 偏移 → 画布像素偏移
+            // AppKit 全局左下原点 → 画布像素偏移（与 CGContext 默认 CTM 同向）
             let destRect = CGRect(
                 x: (sub.globalRect.minX - selectionRect.minX) * scale,
-                y: (selectionRect.maxY - sub.globalRect.maxY) * scale,
+                y: (sub.globalRect.minY - selectionRect.minY) * scale,
                 width: sub.globalRect.width * scale,
                 height: sub.globalRect.height * scale
             )

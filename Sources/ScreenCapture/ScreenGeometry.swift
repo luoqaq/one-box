@@ -50,4 +50,46 @@ public enum ScreenGeometry {
             height: (globalRect.height * scale).rounded()
         )
     }
+
+    /// ScreenCaptureKit 输出缓冲像素尺寸。`SCStreamConfiguration` 默认 1920×1080，
+    /// 必须按 contentRect（point）× pointPixelScale 显式设为屏幕原生分辨率，否则 Retina 会被降采样。
+    public static func streamOutputPixelSize(contentRect: CGRect, pointPixelScale: CGFloat) -> (width: Int, height: Int) {
+        let scale = max(pointPixelScale, 1)
+        return (
+            width: max(1, Int((contentRect.width * scale).rounded())),
+            height: max(1, Int((contentRect.height * scale).rounded()))
+        )
+    }
+
+    // MARK: - 选区 ↔ 图像像素（标注坐标）
+
+    /// AppKit 全局点（左下原点）→ 图像像素点（左上原点）。
+    public static func pixelPoint(
+        global: CGPoint,
+        selection: CGRect,
+        imageSize: CGSize
+    ) -> CGPoint {
+        let width = max(selection.width, 1)
+        let height = max(selection.height, 1)
+        let imageW = max(imageSize.width, 1)
+        let imageH = max(imageSize.height, 1)
+        return CGPoint(
+            x: (global.x - selection.minX) / width * imageW,
+            y: (selection.maxY - global.y) / height * imageH
+        )
+    }
+
+    /// 图像像素点（左上原点）→ AppKit 全局点（左下原点）。
+    public static func globalPoint(
+        pixel: CGPoint,
+        selection: CGRect,
+        imageSize: CGSize
+    ) -> CGPoint {
+        let imageW = max(imageSize.width, 1)
+        let imageH = max(imageSize.height, 1)
+        return CGPoint(
+            x: selection.minX + pixel.x / imageW * selection.width,
+            y: selection.maxY - pixel.y / imageH * selection.height
+        )
+    }
 }

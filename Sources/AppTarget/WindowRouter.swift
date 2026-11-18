@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import Combine
+import ImageIO
 import ToolRegistry
 import ToolLauncherUI
 import OneBoxUI
@@ -9,6 +10,7 @@ import ClipboardStore
 import CaptureStore
 import ScreenCapture
 import Annotation
+import ColorPicker
 
 // MARK: - 窗口路由：管理工具箱面板、工作台窗口、设置与标注窗口
 
@@ -19,7 +21,6 @@ final class WindowRouter {
     private var clipboardWindow: NSWindow?
     private var screenshotsWindow: NSWindow?
     private var settingsWindow: NSWindow?
-    private var studioWindow: NSWindow?
 
     var onToggleToolEnabled: (String) -> Void = { _ in }
 
@@ -41,8 +42,15 @@ final class WindowRouter {
         launcherPanel?.orderOut(nil)
     }
 
+    /// Dock / reopen 路径专用：只负责显示，不做 toggle。
+    func presentLauncher() {
+        showLauncher()
+    }
+
     private func showLauncher() {
         let panel = launcherPanel ?? makeLauncherPanel()
+        // 每次打开刷新 root，确保设置里改过的热键文案是最新的。
+        panel.contentView = NSHostingView(rootView: makeLauncherView())
         if let button = AppDelegate.statusItemButton {
             let frame = button.window?.convertToScreen(button.bounds.offsetBy(dx: 0, dy: button.bounds.height)) ?? .zero
             let x = frame.minX - 300 + frame.width / 2
@@ -51,8 +59,9 @@ final class WindowRouter {
         } else {
             center(panel)
         }
-        panel.makeKeyAndOrderFront(nil)
+        // 先激活再 orderFront：Dock reopen 时若反过来，hidesOnDeactivate 会在激活落稳前把面板藏掉。
         NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
     }
 
     private func makeLauncherPanel() -> NSPanel {
@@ -75,39 +84,64 @@ final class WindowRouter {
         panel.standardWindowButton(.closeButton)?.isHidden = true
         panel.standardWindowButton(.miniaturizeButton)?.isHidden = true
         panel.standardWindowButton(.zoomButton)?.isHidden = true
-        panel.contentView = NSHostingView(rootView:
-            LauncherView(
-                registry: model.registry,
-                onOpen: { [weak self] dest in
-                    self?.hideLauncher()
-                    self?.open(dest)
-                },
-                onOpenConfig: { [weak self] dest in
-                    self?.hideLauncher()
-                    switch dest {
-                    case .clipboard:
-                        self?.showClipboardWindow(initialSubView: .config)
-                    case .screenshots:
-                        self?.showScreenshotsWindow(initialSubView: .config)
-                    default:
-                        self?.open(dest)
-                    }
-                },
-                onQuickAction: { [weak self] dest in
-                    self?.hideLauncher()
-                    self?.open(dest)
-                },
-                onOpenSettings: { [weak self] in
-                    self?.hideLauncher()
-                    self?.showSettings()
-                },
-                onToggleEnabled: { [weak self] id in
-                    self?.onToggleToolEnabled(id)
-                }
-            )
-        )
+        // 无标题栏：靠面板背景拖动；固定尺寸，不做缩放。
+        panel.isMovableByWindowBackground = true
+        panel.contentView = NSHostingView(rootView: makeLauncherView())
         launcherPanel = panel
         return panel
+    }
+
+    private func makeLauncherView() -> LauncherView {
+        LauncherView(
+            registry: model.registry,
+            hotkeyLabel: { [weak self] tool in
+                self?.hotkeyDisplay(for: tool)
+            },
+            onOpen: { [weak self] dest in
+                self?.hideLauncher()
+                self?.open(dest)
+            },
+            onOpenConfig: { [weak self] dest in
+                self?.hideLauncher()
+                switch dest {
+                case .clipboard:
+                    self?.showClipboardWindow(initialSubView: .config)
+                case .screenshots:
+                    self?.showScreenshotsWindow(initialSubView: .config)
+                default:
+                    self?.open(dest)
+                }
+            },
+            onQuickAction: { [weak self] dest in
+                self?.hideLauncher()
+                self?.open(dest)
+            },
+            onOpenSettings: { [weak self] target in
+                self?.hideLauncher()
+                self?.showSettings(initialPanel: Self.settingsPanel(from: target))
+            },
+            onToggleEnabled: { [weak self] id in
+                self?.onToggleToolEnabled(id)
+            }
+        )
+    }
+
+    private static func settingsPanel(from target: LauncherSettingsTarget) -> SettingsWindowView.Panel {
+        switch target {
+        case .plugins: return .plugins
+        case .hotkeys: return .hotkeys
+        case .general: return .general
+        case .storage: return .storage
+        }
+    }
+
+    /// 工具外侧展示用：优先读设置里的实际热键，否则退回描述里的默认文案。
+    private func hotkeyDisplay(for tool: ToolDescriptor) -> String? {
+        if let id = tool.hotkeyID {
+            return model.settings.hotkey(for: id).display
+        }
+        guard let shortcut = tool.defaultShortcut, shortcut != "—" else { return nil }
+        return shortcut
     }
 
     // MARK: 目标分发
@@ -120,6 +154,8 @@ final class WindowRouter {
             showScreenshotsWindow(initialSubView: .main)
         case .capture:
             startSelectionCapture()
+        case .colorPicker:
+            startColorPick()
         case .settings:
             showSettings()
         }
@@ -179,7 +215,7 @@ final class WindowRouter {
                     self?.startSelectionCapture()
                 },
                 onAnnotate: { [weak self] record in
-                    self?.openStudioForRecord(record)
+                    self?.annotateCaptureRecord(record)
                 },
                 initialSubView: initialSubView
             )
@@ -191,10 +227,10 @@ final class WindowRouter {
 
     // MARK: 设置
 
-    func showSettings() {
+    func showSettings(initialPanel: SettingsWindowView.Panel = .plugins) {
         let window = settingsWindow ?? makeWorkbenchWindow()
         window.contentView = NSHostingView(rootView:
-            SettingsWindowView(model: model, onClose: {
+            SettingsWindowView(model: model, initialPanel: initialPanel, onClose: {
                 window.orderOut(nil)
             })
         )
@@ -202,43 +238,57 @@ final class WindowRouter {
         show(window)
     }
 
-    // MARK: 标注
-
-    func showStudio(baseImage: CGImage, title: String, sourceRecord: CaptureRecord?) {
-        let window = studioWindow ?? makeWorkbenchWindow()
-        window.setContentSize(NSSize(width: 1080, height: 700))
-        window.contentView = NSHostingView(rootView:
-            AnnotationStudioView(
-                baseImage: baseImage,
-                imageTitle: title,
-                onBack: { [weak self] in
-                    window.orderOut(nil)
-                    self?.showScreenshotsWindow(initialSubView: .main)
-                },
-                onRetake: { [weak self] in
-                    window.orderOut(nil)
-                    self?.startSelectionCapture()
-                },
-                onExport: { [weak self] png, action in
-                    self?.handleStudioExport(png: png, action: action)
-                }
-            )
-        )
-        studioWindow = window
-        center(window)
-        show(window)
-    }
-
-    /// 从最近截图记录打开标注。
-    func openStudioForRecord(_ record: CaptureRecord) {
+    /// 从最近截图记录进入贴图标注。
+    func annotateCaptureRecord(_ record: CaptureRecord) {
         Task { @MainActor in
             let url = await model.captureStore.fileURL(of: record)
-            if let data = try? Data(contentsOf: url),
-               let source = CGImageSourceCreateWithData(data as CFData, nil),
-               let image = CGImageSourceCreateImageAtIndex(source, 0, nil) {
-                showStudio(baseImage: image, title: record.file, sourceRecord: record)
-            } else {
+            guard let data = try? Data(contentsOf: url),
+                  let source = CGImageSourceCreateWithData(data as CFData, nil),
+                  let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
                 model.showToast("读取截图文件失败")
+                return
+            }
+            let captured = CapturedImage(
+                image: image,
+                pngData: data,
+                pointSize: CGSize(width: image.width, height: image.height),
+                pixelSize: CGSize(width: image.width, height: image.height)
+            )
+            hideLauncher()
+            screenshotsWindow?.orderOut(nil)
+            let outcome = await model.captureService.requestAnnotate(captured: captured)
+            if case .selected(let result) = outcome {
+                handleConfirmedCapture(result)
+            }
+        }
+    }
+
+    // MARK: 屏幕取色
+
+    func startColorPick() {
+        guard model.registry.isEnabled("color-picker") else {
+            model.showToast("取色工具未启用")
+            return
+        }
+        hideLauncher()
+        Task { @MainActor in
+            if !model.captureService.authorizationStatus() {
+                guard await model.captureService.requestAccess() else {
+                    model.showToast("需要屏幕录制权限：系统设置 > 隐私与安全性 > 屏幕录制")
+                    showSettings()
+                    return
+                }
+                model.showToast("屏幕录制权限已开启，若仍无法取色请重启 OneBox")
+            }
+            let outcome = await model.colorPickService.requestPick()
+            switch outcome {
+            case .canceled:
+                break
+            case let .picked(color, format):
+                let text = color.string(format: format)
+                writeTextToPasteboard(text)
+                model.registry.registerUse("color-picker")
+                model.showToast("已复制 \(text)")
             }
         }
     }
@@ -251,12 +301,7 @@ final class WindowRouter {
             return
         }
         hideLauncher()
-        let defaultAction: SelectionAction
-        switch model.settings.captureDefaultAction {
-        case .annotate: defaultAction = .annotate
-        case .copy: defaultAction = .copy
-        case .save: defaultAction = .save
-        }
+        screenshotsWindow?.orderOut(nil)
         Task { @MainActor in
             do {
                 // 未授权时先触发系统原生授权弹窗（点「打开系统设置」可直达且 OneBox 已在列表中）。
@@ -269,12 +314,12 @@ final class WindowRouter {
                     }
                     model.showToast("屏幕录制权限已开启，若仍无法截图请重启 OneBox")
                 }
-                let outcome = try await model.captureService.requestSelectionCapture(defaultAction: defaultAction)
+                let outcome = try await model.captureService.requestSelectionCapture()
                 switch outcome {
                 case .canceled:
                     break
-                case let .selected(captured, action):
-                    handleCaptured(captured, action: action)
+                case let .selected(captured):
+                    handleConfirmedCapture(captured)
                 }
             } catch let error as ScreenCaptureError {
                 if case .notAuthorized = error {
@@ -289,7 +334,11 @@ final class WindowRouter {
         }
     }
 
-    private func handleCaptured(_ captured: CapturedImage, action: SelectionAction) {
+    /// 贴图标注确认：复制到剪贴板，并按设置写入最近截图。
+    private func handleConfirmedCapture(_ captured: CapturedImage) {
+        writeImageToPasteboard(pngData: captured.pngData, pointSize: captured.pointSize)
+        model.showToast("已复制到剪贴板")
+        model.registry.registerUse("screenshots")
         if model.settings.captureKeepRecords {
             Task { @MainActor in
                 _ = try? await model.captureStore.insert(png: captured.pngData)
@@ -298,42 +347,29 @@ final class WindowRouter {
                 model.reloadCaptures()
             }
         }
-        switch action {
-        case .annotate:
-            showStudio(baseImage: captured.image, title: "区域截图", sourceRecord: nil)
-        case .copy:
-            writeImageToPasteboard(captured.image)
-            model.showToast("已复制选区截图")
-        case .save:
-            savePNG(captured.pngData)
-        }
     }
 
-    private func handleStudioExport(png: Data, action: AnnotationStudioView.ExportAction) {
-        switch action {
-        case .copy:
-            writeImageToPasteboard(pngData: png)
-            model.showToast("已复制到剪贴板")
-        case .save:
-            savePNG(png)
-        }
-        // 标注结果也计入最近截图
-        if model.settings.captureKeepRecords {
-            Task { @MainActor in
-                _ = try? await model.captureStore.insert(png: png)
-                model.reloadCaptures()
-            }
-        }
-    }
-
-    private func writeImageToPasteboard(_ image: CGImage) {
+    private func writeTextToPasteboard(_ text: String) {
         let pb = NSPasteboard.general
         pb.clearContents()
-        pb.writeObjects([NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))])
+        pb.setString(text, forType: .string)
+        pb.setString("1", forType: NSPasteboard.PasteboardType(OneBoxPasteboardMarker.type))
     }
 
-    private func writeImageToPasteboard(pngData: Data) {
-        guard let image = NSImage(data: pngData) else { return }
+    private func writeImageToPasteboard(_ image: CGImage, pointSize: CGSize? = nil) {
+        let size = pointSize ?? CGSize(width: image.width, height: image.height)
+        let nsImage = NSImage(cgImage: image, size: size)
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.writeObjects([nsImage])
+    }
+
+    /// 按 pointSize 写入剪贴板，保留 Retina 像素密度（避免被当成 1x 大图或糊图）。
+    private func writeImageToPasteboard(pngData: Data, pointSize: CGSize) {
+        guard let rep = NSBitmapImageRep(data: pngData) else { return }
+        rep.size = pointSize
+        let image = NSImage(size: pointSize)
+        image.addRepresentation(rep)
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.writeObjects([image])
@@ -367,7 +403,8 @@ final class WindowRouter {
         window.isOpaque = false
         window.hasShadow = true
         window.isReleasedWhenClosed = false
-        window.level = .floating
+        // 普通窗口层级：否则会压住「系统设置」等标准窗口，授权时无法点到前面。
+        window.level = .normal
         window.collectionBehavior = [.fullScreenAuxiliary]
         window.standardWindowButton(.closeButton)?.isHidden = true
         window.standardWindowButton(.miniaturizeButton)?.isHidden = true
@@ -378,8 +415,8 @@ final class WindowRouter {
     }
 
     private func show(_ window: NSWindow) {
-        window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
     }
 
     private func center(_ window: NSWindow) {

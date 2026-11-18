@@ -1,69 +1,13 @@
 import SwiftUI
 import Combine
 import ToolRegistry
+import HotKeys
 
-// MARK: - 热键
-
-/// 全局快捷键描述（Carbon 注册用 key code + 修饰键）。
-public struct HotKeySpec: Codable, Equatable, Sendable {
-    public enum Modifier: String, Codable, CaseIterable, Sendable {
-        case control, option, shift, command
-    }
-
-    public var keyCode: Int
-    public var modifiers: Set<Modifier>
-
-    public init(keyCode: Int, modifiers: Set<Modifier>) {
-        self.keyCode = keyCode
-        self.modifiers = modifiers
-    }
-
-    /// 默认：⌃⌥Space（打开工具箱）
-    public static let launcherDefault = HotKeySpec(keyCode: 49, modifiers: [.control, .option])
-    /// 默认：⌃⌥V（剪贴板历史）
-    public static let clipboardDefault = HotKeySpec(keyCode: 9, modifiers: [.control, .option])
-    /// 默认：⌃⌥⇧4（区域截图）
-    public static let captureDefault = HotKeySpec(keyCode: 21, modifiers: [.control, .option, .shift])
-
-    /// 展示文案，如 "⌃⌥V"。
-    public var display: String {
-        var s = ""
-        if modifiers.contains(.control) { s += "⌃" }
-        if modifiers.contains(.option) { s += "⌥" }
-        if modifiers.contains(.shift) { s += "⇧" }
-        if modifiers.contains(.command) { s += "⌘" }
-        return s + Self.keyName(keyCode)
-    }
-
-    /// 常用按键名（Carbon virtual key codes）。
-    public static func keyName(_ keyCode: Int) -> String {
-        switch keyCode {
-        case 49: return "Space"
-        case 36, 76: return "↩"
-        case 53: return "⎋"
-        case 48: return "⇥"
-        case 51: return "⌫"
-        case 122: return "F1"
-        case 120: return "F2"
-        case 99: return "F3"
-        case 118: return "F4"
-        case 96: return "F5"
-        case 97: return "F6"
-        case 98: return "F7"
-        case 100: return "F8"
-        case 101: return "F9"
-        case 109: return "F10"
-        case 103: return "F11"
-        case 111: return "F12"
-        default:
-            let mapped = UnicodeScalar(97 + (keyCode - 0))
-            if keyCode >= 0 && keyCode <= 25, let scalar = mapped, scalar.isASCII {
-                return String(Character(scalar)).uppercased()
-            }
-            return "键\(keyCode)"
-        }
-    }
-}
+// Re-export hotkey model for UI call sites.
+public typealias HotKeySpec = HotKeys.HotKeySpec
+public typealias ModifierKey = HotKeys.ModifierKey
+public typealias ModifierKind = HotKeys.ModifierKind
+public typealias ModifierSide = HotKeys.ModifierSide
 
 // MARK: - 截图默认动作
 
@@ -97,6 +41,7 @@ public final class AppSettings: ObservableObject {
     @Published public var hotkeyLauncher: HotKeySpec { didSet { defaults.set(encode(hotkeyLauncher), forKey: prefix + ".hotkey.launcher") } }
     @Published public var hotkeyClipboard: HotKeySpec { didSet { defaults.set(encode(hotkeyClipboard), forKey: prefix + ".hotkey.clipboard") } }
     @Published public var hotkeyCapture: HotKeySpec { didSet { defaults.set(encode(hotkeyCapture), forKey: prefix + ".hotkey.capture") } }
+    @Published public var hotkeyColorPicker: HotKeySpec { didSet { defaults.set(encode(hotkeyColorPicker), forKey: prefix + ".hotkey.colorPicker") } }
 
     @Published public var clipboardMaxRecords: Int { didSet { defaults.set(clipboardMaxRecords, forKey: prefix + ".clipboard.maxRecords") } }
     @Published public var clipboardRetentionDays: Int { didSet { defaults.set(clipboardRetentionDays, forKey: prefix + ".clipboard.retentionDays") } }
@@ -114,6 +59,7 @@ public final class AppSettings: ObservableObject {
         hotkeyLauncher = Self.decode(defaults.data(forKey: prefix + ".hotkey.launcher")) ?? .launcherDefault
         hotkeyClipboard = Self.decode(defaults.data(forKey: prefix + ".hotkey.clipboard")) ?? .clipboardDefault
         hotkeyCapture = Self.decode(defaults.data(forKey: prefix + ".hotkey.capture")) ?? .captureDefault
+        hotkeyColorPicker = Self.decode(defaults.data(forKey: prefix + ".hotkey.colorPicker")) ?? .colorPickerDefault
         clipboardMaxRecords = defaults.object(forKey: prefix + ".clipboard.maxRecords") as? Int ?? 500
         clipboardRetentionDays = defaults.object(forKey: prefix + ".clipboard.retentionDays") as? Int ?? 30
         captureDefaultAction = CaptureDefaultAction(rawValue: defaults.string(forKey: prefix + ".capture.defaultAction") ?? "") ?? .annotate
@@ -127,6 +73,7 @@ public final class AppSettings: ObservableObject {
         switch id {
         case "clipboard": return hotkeyClipboard
         case "capture": return hotkeyCapture
+        case "colorPicker": return hotkeyColorPicker
         default: return hotkeyLauncher
         }
     }
@@ -135,6 +82,7 @@ public final class AppSettings: ObservableObject {
         switch id {
         case "clipboard": hotkeyClipboard = spec
         case "capture": hotkeyCapture = spec
+        case "colorPicker": hotkeyColorPicker = spec
         default: hotkeyLauncher = spec
         }
     }

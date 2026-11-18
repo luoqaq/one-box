@@ -22,8 +22,10 @@ public enum AnnotationRenderer {
         case cannotFinalizeImage
     }
 
-    /// 打码块边长（像素）。
-    private static let mosaicBlockSize = 12
+    /// 打码块边长（像素）。`strokeWidth` 表示块大小；过小会钳到 4，保证仍是可辨认的马赛克。
+    public static func mosaicBlockSize(for annotation: Annotation) -> Int {
+        max(4, Int(annotation.strokeWidth.rounded()))
+    }
 
     /// 纯函数：把标注按数组顺序叠加到 base 上，输出与 base 像素尺寸一致。
     /// 无效标注（rect 为空、箭头起止点重合或缺失、文字为空）会被安全跳过；
@@ -84,7 +86,7 @@ public enum AnnotationRenderer {
             return false
         }
         switch annotation.kind {
-        case .arrow:
+        case .arrow, .line:
             guard let start = annotation.startPoint, let end = annotation.endPoint else { return false }
             return start != end
                 && start.x.isFinite && start.y.isFinite
@@ -107,6 +109,8 @@ public enum AnnotationRenderer {
         switch annotation.kind {
         case .arrow:
             drawArrow(annotation, context: context, pixelHeight: pixelHeight)
+        case .line:
+            drawLine(annotation, context: context, pixelHeight: pixelHeight)
         case .rectangle:
             drawRectangle(annotation, context: context, pixelHeight: pixelHeight)
         case .text:
@@ -121,19 +125,11 @@ public enum AnnotationRenderer {
     // MARK: - 箭头
 
     private static func drawArrow(_ annotation: Annotation, context: CGContext, pixelHeight: CGFloat) {
-        guard let start = annotation.startPoint, let end = annotation.endPoint else { return }
-        let dx = end.x - start.x
-        let dy = end.y - start.y
-        let length = hypot(dx, dy)
-        guard length > 0 else { return }
-
-        let unitX = dx / length
-        let unitY = dy / length
-        let headLength = 3.5 * annotation.strokeWidth
-        let headWidth = 2.8 * annotation.strokeWidth
-        let headBase = CGPoint(x: end.x - unitX * headLength, y: end.y - unitY * headLength)
-        let perpX = -unitY
-        let perpY = unitX
+        guard let start = annotation.startPoint,
+              let end = annotation.endPoint,
+              let geo = AnnotationArrowGeometry(from: start, to: end, strokeWidth: annotation.strokeWidth) else {
+            return
+        }
 
         context.saveGState()
         context.setLineCap(.round)
@@ -142,25 +138,36 @@ public enum AnnotationRenderer {
         context.setStrokeColor(annotation.color.cgColor)
         context.setFillColor(annotation.color.cgColor)
 
-        // 箭杆：start → 箭头三角底边中心，圆头线帽。
+        // 箭杆：start → 燕尾内侧连接点（不画到尖端，避免圆头线帽顶秃箭头）。
         context.beginPath()
         context.move(to: CGPoint(x: start.x, y: pixelHeight - start.y))
-        context.addLine(to: CGPoint(x: headBase.x, y: pixelHeight - headBase.y))
+        context.addLine(to: CGPoint(x: geo.shaftEnd.x, y: pixelHeight - geo.shaftEnd.y))
         context.strokePath()
 
-        // 实心三角箭头，尖端落在 end 上，底边垂直于箭头方向。
+        // 实心燕尾箭头，尖端落在 end 上。
         context.beginPath()
-        context.move(to: CGPoint(x: end.x, y: pixelHeight - end.y))
-        context.addLine(to: CGPoint(
-            x: headBase.x + perpX * headWidth / 2,
-            y: pixelHeight - (headBase.y + perpY * headWidth / 2)
-        ))
-        context.addLine(to: CGPoint(
-            x: headBase.x - perpX * headWidth / 2,
-            y: pixelHeight - (headBase.y - perpY * headWidth / 2)
-        ))
+        context.move(to: CGPoint(x: geo.tip.x, y: pixelHeight - geo.tip.y))
+        context.addLine(to: CGPoint(x: geo.leftWing.x, y: pixelHeight - geo.leftWing.y))
+        context.addLine(to: CGPoint(x: geo.neck.x, y: pixelHeight - geo.neck.y))
+        context.addLine(to: CGPoint(x: geo.rightWing.x, y: pixelHeight - geo.rightWing.y))
         context.closePath()
         context.fillPath()
+        context.restoreGState()
+    }
+
+    // MARK: - 直线
+
+    private static func drawLine(_ annotation: Annotation, context: CGContext, pixelHeight: CGFloat) {
+        guard let start = annotation.startPoint, let end = annotation.endPoint else { return }
+        context.saveGState()
+        context.setLineCap(.round)
+        context.setLineJoin(.round)
+        context.setLineWidth(annotation.strokeWidth)
+        context.setStrokeColor(annotation.color.cgColor)
+        context.beginPath()
+        context.move(to: CGPoint(x: start.x, y: pixelHeight - start.y))
+        context.addLine(to: CGPoint(x: end.x, y: pixelHeight - end.y))
+        context.strokePath()
         context.restoreGState()
     }
 
@@ -222,16 +229,17 @@ public enum AnnotationRenderer {
         pixelHeight: CGFloat,
         source: [UInt8]
     ) {
-        let block = CGFloat(Self.mosaicBlockSize)
+        let blockSize = Self.mosaicBlockSize(for: annotation)
+        let block = CGFloat(blockSize)
         let imageBounds = CGRect(x: 0, y: 0, width: pixelWidth, height: pixelHeight)
         let area = annotation.rect.intersection(imageBounds)
         guard isRectFinite(area), !area.isNull, !area.isEmpty else { return }
 
-        // 块网格与图像原点对齐（12px 的整数倍），块区域裁剪到标注 rect 内，
+        // 块网格与图像原点对齐（blockSize 的整数倍），块区域裁剪到标注 rect 内，
         // 保证 rect 外的像素不被改动。
-        let startBlockX = Int(floor(area.minX / block)) * Self.mosaicBlockSize
+        let startBlockX = Int(floor(area.minX / block)) * blockSize
         let endX = Int(ceil(area.maxX))
-        let startBlockY = Int(floor(area.minY / block)) * Self.mosaicBlockSize
+        let startBlockY = Int(floor(area.minY / block)) * blockSize
         let endY = Int(ceil(area.maxY))
         let width = Int(pixelWidth)
         let bytesPerRow = width * 4
@@ -258,9 +266,9 @@ public enum AnnotationRenderer {
                         height: region.height
                     ))
                 }
-                blockY += Self.mosaicBlockSize
+                blockY += blockSize
             }
-            blockX += Self.mosaicBlockSize
+            blockX += blockSize
         }
     }
 

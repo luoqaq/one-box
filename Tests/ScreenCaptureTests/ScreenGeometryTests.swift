@@ -175,4 +175,55 @@ struct ScreenGeometryTests {
                 == CGSize(width: 300, height: 400)
         )
     }
+
+    // MARK: - streamOutputPixelSize
+
+    @Test func streamOutputUsesPointPixelScale() {
+        let size = ScreenGeometry.streamOutputPixelSize(
+            contentRect: CGRect(x: 0, y: 0, width: 1728, height: 1117),
+            pointPixelScale: 2
+        )
+        #expect(size.width == 3456)
+        #expect(size.height == 2234)
+    }
+
+    @Test func streamOutputRejectsZeroDimensions() {
+        let size = ScreenGeometry.streamOutputPixelSize(
+            contentRect: .zero,
+            pointPixelScale: 2
+        )
+        #expect(size.width == 1)
+        #expect(size.height == 1)
+    }
+
+    // MARK: - pixel ↔ global
+
+    @Test func pixelGlobalRoundTrip() {
+        let selection = CGRect(x: 100, y: 200, width: 400, height: 300)
+        let imageSize = CGSize(width: 800, height: 600) // 2x
+        let samples = [
+            CGPoint(x: 100, y: 500), // 选区左上（AppKit）
+            CGPoint(x: 500, y: 200), // 选区右下
+            CGPoint(x: 300, y: 350), // 中心
+        ]
+        for global in samples {
+            let pixel = ScreenGeometry.pixelPoint(global: global, selection: selection, imageSize: imageSize)
+            let back = ScreenGeometry.globalPoint(pixel: pixel, selection: selection, imageSize: imageSize)
+            #expect(abs(back.x - global.x) < 0.001)
+            #expect(abs(back.y - global.y) < 0.001)
+        }
+    }
+
+    @Test func pixelPointMapsTopLeftCorner() {
+        let selection = CGRect(x: 10, y: 20, width: 100, height: 80)
+        let imageSize = CGSize(width: 200, height: 160)
+        // AppKit 选区顶部 = maxY
+        let pixel = ScreenGeometry.pixelPoint(
+            global: CGPoint(x: 10, y: 100),
+            selection: selection,
+            imageSize: imageSize
+        )
+        #expect(abs(pixel.x) < 0.001)
+        #expect(abs(pixel.y) < 0.001)
+    }
 }

@@ -69,51 +69,57 @@ public struct AnnotationStudioView: View {
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.12), lineWidth: 0.5)
+                .strokeBorder(OB.studioBorder, lineWidth: 0.5)
         )
         .preferredColorScheme(.dark)
+        .tint(OB.brandYellow)
     }
 
     // MARK: 顶栏（50pt）
 
     private var topbar: some View {
-        HStack {
-            HStack(spacing: 12) {
-                TrafficDots()
-                Text("标注编辑")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(.white)
-                Text("\(baseImage.width) × \(baseImage.height) · PNG")
-                    .font(.system(size: 11.5).monospaced())
-                    .foregroundColor(.white.opacity(0.45))
+        ZStack {
+            OB.studioBar.allowsHitTesting(false)
+            WindowDragRegion()
+            HStack {
+                HStack(spacing: 12) {
+                    TrafficDots()
+                    Text("标注编辑")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(OB.studioInk)
+                        .allowsHitTesting(false)
+                    Text("\(baseImage.width) × \(baseImage.height) · PNG")
+                        .font(.system(size: 11.5).monospaced())
+                        .foregroundColor(OB.studioInk3)
+                        .allowsHitTesting(false)
+                }
+                Spacer(minLength: 0).allowsHitTesting(false)
+                // 工具条
+                HStack(spacing: 2) {
+                    studioToolButton(.select, icon: .arrowUpRight)
+                    studioToolButton(.arrow, icon: .arrowUpRight)
+                    studioToolButton(.rectangle, icon: .rect)
+                    studioToolButton(.text, icon: .typeT)
+                    studioToolButton(.mosaic, icon: .mosaic)
+                }
+                .padding(3)
+                .background(
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(OB.studioSurface)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .strokeBorder(OB.studioSeparator, lineWidth: 0.5)
+                )
+                Spacer(minLength: 0).allowsHitTesting(false)
+                HStack(spacing: 6) {
+                    studioIconButton(.undo, title: "撤销") { undo() }
+                    studioIconButton(.redo, title: "重做") { redo() }
+                }
             }
-            Spacer()
-            // 工具条
-            HStack(spacing: 2) {
-                studioToolButton(.select, icon: .arrowUpRight)
-                studioToolButton(.arrow, icon: .arrowUpRight)
-                studioToolButton(.rectangle, icon: .rect)
-                studioToolButton(.text, icon: .typeT)
-                studioToolButton(.mosaic, icon: .mosaic)
-            }
-            .padding(3)
-            .background(
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(Color.white.opacity(0.06))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.08), lineWidth: 0.5)
-            )
-            Spacer()
-            HStack(spacing: 6) {
-                studioIconButton(.undo, title: "撤销") { undo() }
-                studioIconButton(.redo, title: "重做") { redo() }
-            }
+            .padding(.horizontal, 14)
         }
-        .padding(.horizontal, 14)
         .frame(height: 50)
-        .background(OB.studioBar)
         .overlay(alignment: .bottom) { Divider().overlay(OB.studioSeparator) }
     }
 
@@ -123,16 +129,16 @@ public struct AnnotationStudioView: View {
             selectedAnnotationID = nil
         } label: {
             HStack(spacing: 5) {
-                OBIcon(icon, size: 14, weight: 2)
+                OBIcon(icon, size: 14, weight: 1.65)
                 Text(t.rawValue)
                     .font(.system(size: 12, weight: .medium))
             }
-            .foregroundColor(.white.opacity(tool == t ? 1 : 0.65))
+            .foregroundColor(tool == t ? OB.studioInk : OB.studioInk2)
             .padding(.horizontal, 10)
             .frame(height: 30)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(tool == t ? Color.white.opacity(0.14) : Color.clear)
+                    .fill(tool == t ? OB.studioSurfaceHover : Color.clear)
             )
         }
         .buttonStyle(.plain)
@@ -140,8 +146,8 @@ public struct AnnotationStudioView: View {
 
     private func studioIconButton(_ icon: OBIcon.ID, title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            OBIcon(icon, size: 15, weight: 2)
-                .foregroundColor(.white.opacity(0.62))
+            OBIcon(icon, size: 15, weight: 1.65)
+                .foregroundColor(OB.studioInk2)
                 .frame(width: 28, height: 28)
                 .contentShape(Rectangle())
         }
@@ -359,7 +365,7 @@ public struct AnnotationStudioView: View {
                                     .foregroundColor(.white.opacity(0.78))
                                 Spacer()
                                 if selectedAnnotationID == annotation.id {
-                                    OBIcon(.close, size: 11, weight: 2)
+                                    OBIcon(.close, size: 11, weight: 1.65)
                                         .foregroundColor(.white.opacity(0.6))
                                 }
                             }
@@ -367,7 +373,7 @@ public struct AnnotationStudioView: View {
                             .padding(.vertical, 6)
                             .background(
                                 RoundedRectangle(cornerRadius: 6)
-                                    .fill(selectedAnnotationID == annotation.id ? Color(red: 0, green: 122/255, blue: 1, opacity: 0.18) : Color.clear)
+                                    .fill(selectedAnnotationID == annotation.id ? OB.brandYellowSoft : Color.clear)
                             )
                         }
                         .buttonStyle(.plain)
@@ -378,7 +384,7 @@ public struct AnnotationStudioView: View {
                     if annotations.isEmpty {
                         Text("拖拽画布创建标注")
                             .font(.system(size: 12))
-                            .foregroundColor(.white.opacity(0.4))
+                            .foregroundColor(.white.opacity(0.55))
                     }
                 }
             }
@@ -400,6 +406,7 @@ public struct AnnotationStudioView: View {
     private func layerName(_ annotation: Annotation) -> String {
         switch annotation.kind {
         case .arrow: return "箭头"
+        case .line: return "直线"
         case .rectangle: return "矩形框"
         case .text: return "文字标注"
         case .mosaic: return "打码"
@@ -412,15 +419,20 @@ public struct AnnotationStudioView: View {
         return Button {
             color = c
         } label: {
-            Circle()
-                .fill(Color(red: c.r, green: c.g, blue: c.b))
-                .frame(width: 22, height: 22)
-                .overlay(
-                    Circle().strokeBorder(
-                        isActive ? Color.white : Color.white.opacity(0.25),
-                        lineWidth: isActive ? 2 : 1.5
+            ZStack {
+                if isActive {
+                    Circle()
+                        .strokeBorder(Color.white, lineWidth: 2)
+                        .frame(width: 24, height: 24)
+                }
+                Circle()
+                    .fill(Color(red: c.r, green: c.g, blue: c.b))
+                    .frame(width: isActive ? 16 : 20, height: isActive ? 16 : 20)
+                    .overlay(
+                        Circle().strokeBorder(Color.white.opacity(0.25), lineWidth: 1)
                     )
-                )
+            }
+            .frame(width: 24, height: 24)
         }
         .buttonStyle(.plain)
     }
@@ -446,7 +458,7 @@ public struct AnnotationStudioView: View {
         HStack {
             Text(title)
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(.white.opacity(0.46))
+                .foregroundColor(.white.opacity(0.62))
             Spacer()
             if let trailing {
                 Text(trailing)
@@ -460,7 +472,7 @@ public struct AnnotationStudioView: View {
         HStack {
             Text(key).font(.system(size: 12)).foregroundColor(.white.opacity(0.78))
             Spacer()
-            Text(value).font(.system(size: 11.5)).foregroundColor(.white.opacity(0.45))
+            Text(value).font(.system(size: 11.5)).foregroundColor(.white.opacity(0.58))
         }
     }
 
@@ -521,12 +533,12 @@ public struct AnnotationStudioView: View {
                             .font(.system(size: 12.5, weight: .medium))
                         Kbd(text: "⌘S", dark: true)
                     }
-                    .foregroundColor(.white)
+                    .foregroundColor(OB.studioInk)
                     .frame(height: 30)
                     .padding(.horizontal, 12)
                     .background(
                         RoundedRectangle(cornerRadius: 7)
-                            .fill(Color.white.opacity(0.10))
+                            .fill(OB.studioSurfaceHover)
                     )
                 }
                 .buttonStyle(.plain)
@@ -537,15 +549,15 @@ public struct AnnotationStudioView: View {
                 } label: {
                     HStack(spacing: 6) {
                         Text("复制")
-                            .font(.system(size: 12.5, weight: .medium))
-                        Kbd(text: "⌘↩", dark: true)
+                            .font(.system(size: 12.5, weight: .semibold))
+                        Kbd(text: "⌘↩")
                     }
-                    .foregroundColor(.white)
+                    .foregroundColor(OB.ink)
                     .frame(height: 30)
                     .padding(.horizontal, 12)
                     .background(
                         RoundedRectangle(cornerRadius: 7)
-                            .fill(OB.accent)
+                            .fill(OB.brandYellow)
                     )
                 }
                 .buttonStyle(.plain)
@@ -602,6 +614,7 @@ struct TrafficDots: View {
             Circle().fill(Color(hex: 0xFEBC2E)).frame(width: 8, height: 8)
             Circle().fill(Color(hex: 0x28C840)).frame(width: 8, height: 8)
         }
+        .allowsHitTesting(false) // 装饰用，不挡窗口拖动
     }
 }
 
@@ -633,13 +646,17 @@ struct AnnotationOverlayView: View {
                     guard let start = annotation.startPoint, let end = annotation.endPoint else { continue }
                     let p0 = CGPoint(x: start.x * s, y: start.y * s)
                     let p1 = CGPoint(x: end.x * s, y: end.y * s)
+                    drawArrow(&context, from: p0, to: p1, color: color, strokeWidth: annotation.strokeWidth)
+
+                case .line:
+                    guard let start = annotation.startPoint, let end = annotation.endPoint else { continue }
+                    let p0 = CGPoint(x: start.x * s, y: start.y * s)
+                    let p1 = CGPoint(x: end.x * s, y: end.y * s)
                     var path = Path()
                     path.move(to: p0)
                     path.addLine(to: p1)
                     context.stroke(path, with: .color(color),
                                    style: StrokeStyle(lineWidth: annotation.strokeWidth, lineCap: .round))
-                    // 箭头头部
-                    drawArrowHead(&context, from: p0, to: p1, color: color, strokeWidth: annotation.strokeWidth)
 
                 case .rectangle:
                     let path = Path(roundedRect: rect, cornerRadius: 4)
@@ -665,7 +682,7 @@ struct AnnotationOverlayView: View {
 
                 if annotation.id == selectedID {
                     let sel = Path(rect.insetBy(dx: -4, dy: -4))
-                    context.stroke(sel, with: .color(Color(red: 0, green: 122/255, blue: 1, opacity: 0.8)),
+                    context.stroke(sel, with: .color(OB.brandYellow.opacity(0.9)),
                                    style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
                 }
             }
@@ -673,20 +690,20 @@ struct AnnotationOverlayView: View {
         .allowsHitTesting(false)
     }
 
-    private func drawArrowHead(_ context: inout GraphicsContext, from: CGPoint, to: CGPoint,
-                               color: Color, strokeWidth: CGFloat) {
-        let headLen = strokeWidth * 3.5
-        let headWidth = strokeWidth * 2.8
-        let angle = atan2(to.y - from.y, to.x - from.x)
-        let p1 = to
-        let p2 = CGPoint(x: to.x - headLen * cos(angle - atan2(headWidth / 2, headLen)),
-                         y: to.y - headLen * sin(angle - atan2(headWidth / 2, headLen)))
-        let p3 = CGPoint(x: to.x - headLen * cos(angle + atan2(headWidth / 2, headLen)),
-                         y: to.y - headLen * sin(angle + atan2(headWidth / 2, headLen)))
+    private func drawArrow(_ context: inout GraphicsContext, from: CGPoint, to: CGPoint,
+                           color: Color, strokeWidth: CGFloat) {
+        guard let geo = AnnotationArrowGeometry(from: from, to: to, strokeWidth: strokeWidth) else { return }
+        var shaft = Path()
+        shaft.move(to: from)
+        shaft.addLine(to: geo.shaftEnd)
+        context.stroke(shaft, with: .color(color),
+                       style: StrokeStyle(lineWidth: strokeWidth, lineCap: .round))
+
         var head = Path()
-        head.move(to: p1)
-        head.addLine(to: p2)
-        head.addLine(to: p3)
+        head.move(to: geo.tip)
+        head.addLine(to: geo.leftWing)
+        head.addLine(to: geo.neck)
+        head.addLine(to: geo.rightWing)
         head.closeSubpath()
         context.fill(head, with: .color(color))
     }

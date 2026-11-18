@@ -35,12 +35,13 @@ public struct SettingsWindowView: View {
         }
     }
 
-    @State private var panel: Panel = .plugins
+    @State private var panel: Panel
     @State private var showResetConfirm = false
 
-    public init(model: AppModel, onClose: @escaping () -> Void) {
+    public init(model: AppModel, initialPanel: Panel = .plugins, onClose: @escaping () -> Void) {
         self.model = model
         self.onClose = onClose
+        _panel = State(initialValue: initialPanel)
     }
 
     public var body: some View {
@@ -53,6 +54,7 @@ public struct SettingsWindowView: View {
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(toastOverlay)
         .preferredColorScheme(.light)
+        .tint(OB.accent)
         .overlay {
             if showResetConfirm {
                 ConfirmModal(
@@ -74,41 +76,30 @@ public struct SettingsWindowView: View {
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 2) {
-            HStack {
-                TrafficDots()
-                Spacer()
-                Text("v0.1.0")
-                    .font(.system(size: 11).monospaced())
-                    .foregroundColor(OB.ink3)
+            ZStack {
+                WindowDragRegion()
+                HStack {
+                    TrafficDots()
+                    Spacer(minLength: 0).allowsHitTesting(false)
+                    Text("v0.1.0")
+                        .font(.system(size: 11).monospaced())
+                        .foregroundColor(OB.ink3)
+                        .allowsHitTesting(false)
+                }
+                .padding(.horizontal, 6)
             }
-            .padding(.horizontal, 6)
             .padding(.bottom, 16)
 
             ForEach(Panel.allCases) { p in
-                Button {
+                SidebarItemView(panel: p, isSelected: panel == p) {
                     panel = p
-                } label: {
-                    HStack(spacing: 9) {
-                        OBIcon(p.icon, size: 15, weight: 1.9)
-                        Text(p.title)
-                            .font(.system(size: 13, weight: panel == p ? .semibold : .regular))
-                    }
-                    .foregroundColor(panel == p ? OB.accentInk : OB.ink2)
-                    .padding(.horizontal, 9)
-                    .frame(height: 32)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .fill(panel == p ? OB.accentSoft : Color.clear)
-                    )
                 }
-                .buttonStyle(.plain)
             }
             Spacer()
         }
         .padding(10)
         .frame(width: 204, alignment: .top)
-        .background(Color(red: 242/255, green: 244/255, blue: 247/255, opacity: 0.72))
+        .background(OB.sidebarBg)
         .overlay(alignment: .trailing) { Divider().overlay(OB.hairline) }
     }
 
@@ -127,7 +118,7 @@ public struct SettingsWindowView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(EdgeInsets(top: 22, leading: 26, bottom: 26, trailing: 26))
         }
-        .background(Color(red: 249/255, green: 250/255, blue: 252/255, opacity: 0.90))
+        .background(OB.contentBg)
     }
 
     private var heading: some View {
@@ -148,13 +139,19 @@ public struct SettingsWindowView: View {
                     PluginSettingsRow(
                         tool: tool,
                         isEnabled: model.registry.isEnabled(tool.id),
+                        hotkeyLabel: {
+                            if let id = tool.hotkeyID {
+                                return model.settings.hotkey(for: id).display
+                            }
+                            return tool.defaultShortcut
+                        }(),
                         onToggle: { model.registry.toggleEnabled(tool.id) }
                     )
                 }
             }
 
             SettingsCard {
-                SettingsRow(title: "在工具箱展示未启用和规划中工具", desc: "关闭后工具箱只列出当前已启用模块，桌面更极简") {
+                SettingsRow(title: "在百宝袋展示未启用和规划中工具", desc: "关闭后百宝袋只列出当前已启用模块，桌面更极简") {
                     OBToggle(isOn: model.settings.showInactiveTools) {
                         model.settings.showInactiveTools.toggle()
                         OBLauncherPreferences.showInactiveTools = model.settings.showInactiveTools
@@ -164,14 +161,66 @@ public struct SettingsWindowView: View {
         }
     }
 
-    /// 插件行：标题带运行时状态（· 后台监听中 · ~4 MB（按需缓存））。
+    private struct SidebarItemView: View {
+        let panel: Panel
+        let isSelected: Bool
+        let action: () -> Void
+        @State private var isHovering = false
+
+        var body: some View {
+            Button(action: action) {
+                HStack(spacing: 9) {
+                    OBIcon(panel.icon, size: 15, weight: 1.55)
+                    Text(panel.title)
+                        .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
+                }
+                .foregroundColor(isSelected ? OB.accentInk : (isHovering ? OB.ink : OB.ink2))
+                .padding(.horizontal, 9)
+                .frame(height: 32)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(isSelected ? OB.accentSoft : (isHovering ? OB.surfaceHover : Color.clear))
+                )
+                .overlay(alignment: .leading) {
+                    if isSelected {
+                        RoundedRectangle(cornerRadius: 1.5)
+                            .fill(OB.brandYellow)
+                            .frame(width: 3, height: 16)
+                            .padding(.leading, 2)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .onHover { isHovering = $0 }
+            .animation(.easeInOut(duration: 0.12), value: isHovering)
+        }
+    }
+
+    /// 插件行：标题带运行时状态（· 后台监听中 · ~4 MB（按需缓存））；外侧常驻全局热键。
     private struct PluginSettingsRow: View {
         let tool: ToolDescriptor
         let isEnabled: Bool
+        let hotkeyLabel: String?
         let onToggle: () -> Void
 
         var body: some View {
-            HStack(alignment: .center, spacing: 16) {
+            let fgColor = Color(flexibleHex: tool.fgHex)
+            let bgColor = Color(flexibleHex: tool.bgHex)
+
+            HStack(alignment: .center, spacing: 13) {
+                OBIcon(tool.iconID, size: 15, weight: 1.6)
+                    .foregroundColor(fgColor)
+                    .frame(width: 28, height: 28)
+                    .background(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(bgColor)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .strokeBorder(fgColor.opacity(0.18), lineWidth: 0.5)
+                    )
+
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 7) {
                         Text(tool.name)
@@ -185,6 +234,9 @@ public struct SettingsWindowView: View {
                         .foregroundColor(OB.ink3)
                 }
                 Spacer(minLength: 12)
+                if let hotkeyLabel, hotkeyLabel != "—", !hotkeyLabel.isEmpty {
+                    Kbd(text: hotkeyLabel)
+                }
                 OBToggle(isOn: isEnabled, action: onToggle)
             }
             .padding(.horizontal, 14)
@@ -205,8 +257,8 @@ public struct SettingsWindowView: View {
                         LaunchAtLoginController.setEnabled(model.settings.launchAtLogin)
                     }
                 }
-                SettingsRow(title: "点击菜单栏默认打开", desc: "工具箱聚合入口或直达单个高频工具") {
-                    OBSegmentedControl(options: [true, false], title: { $0 ? "工具箱" : "剪贴板历史" },
+                SettingsRow(title: "点击菜单栏默认打开", desc: "百宝袋聚合入口或直达单个高频工具") {
+                    OBSegmentedControl(options: [true, false], title: { $0 ? "百宝袋" : "剪贴板历史" },
                                         selection: Binding(get: { model.settings.defaultOpenLauncher },
                                                            set: { model.settings.defaultOpenLauncher = $0 }))
                 }
@@ -219,26 +271,44 @@ public struct SettingsWindowView: View {
         VStack(alignment: .leading, spacing: 12) {
             heading
             SettingsCard {
-                SettingsRow(title: "打开工具箱", desc: "呼出工具聚合搜索入口") {
-                    HotkeyButton(spec: model.settings.hotkeyLauncher) { spec in
-                        model.settings.setHotkey(spec, for: "launcher")
-                        model.showToast("快捷键已更新")
+                SettingsRow(title: "辅助功能权限", desc: "全局快捷键（含双击修饰键、区分左右）依赖此项") {
+                    HStack(spacing: 8) {
+                        PermBadge(AccessibilityPermission.isTrusted ? .ok("已允许") : .warn("未授权"))
+                        if !AccessibilityPermission.isTrusted {
+                            OBButton(title: "打开系统设置", style: .secondary) {
+                                _ = AccessibilityPermission.promptIfNeeded()
+                                AccessibilityPermission.openSystemSettings()
+                            }
+                        }
                     }
+                }
+                SettingsRow(title: "打开百宝袋", desc: "呼出工具聚合搜索入口") {
+                    hotkeyButton(for: "launcher", spec: model.settings.hotkeyLauncher)
                 }
                 SettingsRow(title: "直达剪贴板历史", desc: "仅在启用剪贴板工具时注册监听") {
-                    HotkeyButton(spec: model.settings.hotkeyClipboard) { spec in
-                        model.settings.setHotkey(spec, for: "clipboard")
-                        model.showToast("快捷键已更新")
-                    }
+                    hotkeyButton(for: "clipboard", spec: model.settings.hotkeyClipboard)
                 }
                 SettingsRow(title: "开始区域截图", desc: "仅在启用截图工具时注册监听") {
-                    HotkeyButton(spec: model.settings.hotkeyCapture) { spec in
-                        model.settings.setHotkey(spec, for: "capture")
-                        model.showToast("快捷键已更新")
-                    }
+                    hotkeyButton(for: "capture", spec: model.settings.hotkeyCapture)
+                }
+                SettingsRow(title: "屏幕取色", desc: "仅在启用取色工具时注册") {
+                    hotkeyButton(for: "colorPicker", spec: model.settings.hotkeyColorPicker)
                 }
             }
         }
+    }
+
+    private func hotkeyButton(for id: String, spec: HotKeySpec) -> some View {
+        HotkeyButton(spec: spec, onRecord: { newSpec in
+            model.settings.setHotkey(newSpec, for: id)
+            model.showToast("快捷键已更新")
+            if !AccessibilityPermission.isTrusted {
+                _ = AccessibilityPermission.promptIfNeeded()
+                model.showToast("请在系统设置中允许辅助功能后快捷键才会生效")
+            }
+        }, onInvalid: { message in
+            model.showToast(message)
+        })
     }
 
     // 权限与存储
@@ -246,14 +316,21 @@ public struct SettingsWindowView: View {
         VStack(alignment: .leading, spacing: 12) {
             heading
             SettingsCard {
-                SettingsRow(title: "屏幕录制", desc: "用于截图与标注工具") {
+                SettingsRow(title: "屏幕录制", desc: "用于截图、标注与屏幕取色") {
                     PermBadge(model.captureService.authorizationStatus() ? .ok("已允许") : .warn("未授权"))
                 }
                 SettingsRow(title: "剪贴板访问", desc: "系统隐私策略可能会提示确认") {
                     PermBadge(.warn("待实机确认"))
                 }
-                SettingsRow(title: "辅助功能", desc: "V1 不自动发送 Cmd+V，无需开启") {
-                    PermBadge(.off("未使用"))
+                SettingsRow(title: "辅助功能", desc: "全局快捷键监听需要；可点右侧打开系统设置") {
+                    HStack(spacing: 8) {
+                        PermBadge(AccessibilityPermission.isTrusted ? .ok("已允许") : .warn("未授权"))
+                        if !AccessibilityPermission.isTrusted {
+                            OBButton(title: "打开系统设置", style: .secondary) {
+                                AccessibilityPermission.openSystemSettings()
+                            }
+                        }
+                    }
                 }
             }
             SettingsCard {
@@ -296,8 +373,8 @@ private struct StorageUsageRow: View {
                     .foregroundColor(OB.ink3)
                 GeometryReader { geo in
                     ZStack(alignment: .leading) {
-                        Capsule().fill(Color(red: 15/255, green: 23/255, blue: 42/255, opacity: 0.09))
-                        Capsule().fill(OB.accent)
+                        Capsule().fill(OB.surfaceActive)
+                        Capsule().fill(OB.brandYellow)
                             .frame(width: max(4, geo.size.width * usageFraction))
                     }
                 }

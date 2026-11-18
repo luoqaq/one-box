@@ -13,6 +13,7 @@ public enum ToolDestination: String, Codable, Sendable, Hashable {
     case clipboard
     case screenshots
     case capture
+    case colorPicker
     case settings
 }
 

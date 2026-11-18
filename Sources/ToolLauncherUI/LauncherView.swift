@@ -4,12 +4,22 @@ import ToolRegistry
 
 // MARK: - 工具箱（原型 view-launcher：单栏直达，无右侧详情栏）
 
+/// 工具箱跳进全局设置时的落点。
+public enum LauncherSettingsTarget: String, Sendable {
+    case plugins
+    case hotkeys
+    case general
+    case storage
+}
+
 public struct LauncherView: View {
-    let registry: ToolRegistry
+    @ObservedObject var registry: ToolRegistry
+    /// 按工具返回外侧展示的全局热键文案（如 "⌃⌥V"）；无则不显示。
+    let hotkeyLabel: (ToolDescriptor) -> String?
     let onOpen: (ToolDestination) -> Void
     let onOpenConfig: (ToolDestination) -> Void
     let onQuickAction: (ToolDestination) -> Void
-    let onOpenSettings: () -> Void
+    let onOpenSettings: (LauncherSettingsTarget) -> Void
     let onToggleEnabled: (String) -> Void
 
     @State private var searchText = ""
@@ -22,13 +32,15 @@ public struct LauncherView: View {
 
     public init(
         registry: ToolRegistry,
+        hotkeyLabel: @escaping (ToolDescriptor) -> String? = { $0.defaultShortcut },
         onOpen: @escaping (ToolDestination) -> Void,
         onOpenConfig: @escaping (ToolDestination) -> Void,
         onQuickAction: @escaping (ToolDestination) -> Void,
-        onOpenSettings: @escaping () -> Void,
+        onOpenSettings: @escaping (LauncherSettingsTarget) -> Void,
         onToggleEnabled: @escaping (String) -> Void
     ) {
-        self.registry = registry
+        self._registry = ObservedObject(wrappedValue: registry)
+        self.hotkeyLabel = hotkeyLabel
         self.onOpen = onOpen
         self.onOpenConfig = onOpenConfig
         self.onQuickAction = onQuickAction
@@ -36,7 +48,7 @@ public struct LauncherView: View {
         self.onToggleEnabled = onToggleEnabled
     }
 
-    /// 过滤 + 排序后的当前列表（⌘1-9 与上下键共用）。
+    /// 过滤 + 排序后的当前列表（上下键选择共用）。
     private var items: [ToolDescriptor] {
         registry.filteredTools(
             filter: filter,
@@ -72,69 +84,78 @@ public struct LauncherView: View {
             }
         }
         .preferredColorScheme(.light)
+        .tint(OB.accent)
     }
 
     // MARK: 搜索栏（54pt）
 
     private var searchBar: some View {
-        HStack(spacing: 11) {
-            OBIcon(.search, size: 18, weight: 2)
-                .foregroundColor(OB.ink3)
-            TextField("搜索工具、拼音简拼（jtb / jt）或关键词…", text: $searchText)
-                .textFieldStyle(.plain)
-                .font(.system(size: 15, weight: .regular))
-                .focused($searchFocused)
-                .onSubmit { openSelected() }
-            HStack(spacing: 6) {
-                Kbd(text: "⌘K")
-                iconButton(.gear, title: "全局设置与工具管理") { onOpenSettings() }
+        ZStack {
+            OB.glassBar1.allowsHitTesting(false)
+            WindowDragRegion()
+            HStack(spacing: 11) {
+                OBIcon(.search, size: 18, weight: 1.65)
+                    .foregroundColor(OB.ink3)
+                    .allowsHitTesting(false)
+                TextField("搜索工具、拼音简拼（jtb / jt）或关键词…", text: $searchText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 15, weight: .regular))
+                    .focused($searchFocused)
+                    .onSubmit { openSelected() }
+                HStack(spacing: 6) {
+                    Kbd(text: "⌘K").allowsHitTesting(false)
+                    LauncherIconButton(icon: .gear, title: "全局设置与工具管理") { onOpenSettings(.plugins) }
+                }
             }
+            .padding(.horizontal, 16)
         }
-        .padding(.horizontal, 16)
         .frame(height: 54)
-        .background(OB.glassBar1)
         .overlay(alignment: .bottom) { Divider().overlay(OB.hairline) }
     }
 
     // MARK: 过滤栏（38pt）
 
     private var filterBar: some View {
-        HStack {
-            HStack(spacing: 2) {
-                ForEach(LauncherFilter.allCases, id: \.self) { f in
-                    pill(f.title, active: filter == f) {
-                        filter = f
+        ZStack {
+            OB.glassBar2.allowsHitTesting(false)
+            WindowDragRegion()
+            HStack {
+                HStack(spacing: 2) {
+                    ForEach(LauncherFilter.allCases, id: \.self) { f in
+                        pill(f.title, active: filter == f) {
+                            filter = f
+                        }
                     }
                 }
-            }
-            Spacer()
-            HStack(spacing: 6) {
-                Button {
-                    sortMode = sortMode == .pinned ? .frequent : .pinned
-                } label: {
-                    HStack(spacing: 4) {
-                        OBIcon(.refresh, size: 12, weight: 2)
-                            .opacity(0.75)
-                        Text(sortMode.title)
-                            .font(.system(size: 11.5, weight: .medium))
+                Spacer(minLength: 0).allowsHitTesting(false)
+                HStack(spacing: 6) {
+                    Button {
+                        sortMode = sortMode == .pinned ? .frequent : .pinned
+                    } label: {
+                        HStack(spacing: 4) {
+                            OBIcon(.refresh, size: 12, weight: 1.65)
+                                .opacity(0.75)
+                            Text(sortMode.title)
+                                .font(.system(size: 11.5, weight: .medium))
+                        }
+                        .foregroundColor(OB.ink2)
+                        .padding(.horizontal, 8)
+                        .frame(height: 25)
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        .contentShape(Rectangle())
                     }
-                    .foregroundColor(OB.ink2)
-                    .padding(.horizontal, 8)
-                    .frame(height: 25)
-                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
+                    Text("\(registry.enabledCount) 启用 · \(registry.disabledCount) 待机")
+                        .font(.system(size: 11))
+                        .foregroundColor(OB.ink3)
+                        .monospacedDigit()
+                        .padding(.trailing, 4)
+                        .allowsHitTesting(false)
                 }
-                .buttonStyle(.plain)
-                Text("\(registry.enabledCount) 启用 · \(registry.disabledCount) 待机")
-                    .font(.system(size: 11))
-                    .foregroundColor(OB.ink3)
-                    .monospacedDigit()
-                    .padding(.trailing, 4)
             }
+            .padding(.horizontal, 12)
         }
-        .padding(.horizontal, 12)
         .frame(height: 38)
-        .background(OB.glassBar2)
         .overlay(alignment: .bottom) { Divider().overlay(OB.hairline) }
     }
 
@@ -148,7 +169,7 @@ public struct LauncherView: View {
                 .background(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .fill(active ? Color.white.opacity(0.85) : Color.clear)
-                        .shadow(color: active ? Color(red: 15/255, green: 23/255, blue: 42/255, opacity: 0.08) : .clear, radius: 1, x: 0, y: 1)
+                        .shadow(color: active ? OB.hairline : .clear, radius: 1, x: 0, y: 1)
                 )
         }
         .buttonStyle(.plain)
@@ -166,26 +187,26 @@ public struct LauncherView: View {
 
                 if !pinned.isEmpty {
                     groupLabel("已置顶", trailing: "可拖拽或 ↑↓ 排序")
-                    ForEach(Array(pinned.enumerated()), id: \.element.id) { idx, tool in
-                        row(tool, quickIndex: idx + 1)
+                    ForEach(pinned) { tool in
+                        row(tool)
                     }
                 }
                 if !otherEnabled.isEmpty {
                     groupLabel("已启用", trailing: "\(otherEnabled.count)", topPadding: 4)
-                    ForEach(Array(otherEnabled.enumerated()), id: \.element.id) { idx, tool in
-                        row(tool, quickIndex: pinned.count + idx + 1)
+                    ForEach(otherEnabled) { tool in
+                        row(tool)
                     }
                 }
                 if !disabled.isEmpty {
                     groupLabel("已内置 · 未启用（0 内存）", trailing: "\(disabled.count)", topPadding: 6)
                     ForEach(disabled) { tool in
-                        row(tool, quickIndex: 0)
+                        row(tool)
                     }
                 }
                 if !planned.isEmpty {
                     groupLabel("后续扩展", trailing: "\(planned.count)", topPadding: 6)
                     ForEach(planned) { tool in
-                        row(tool, quickIndex: 0)
+                        row(tool)
                     }
                 }
                 if items.isEmpty {
@@ -218,7 +239,7 @@ public struct LauncherView: View {
 
     // MARK: 工具行
 
-    private func row(_ tool: ToolDescriptor, quickIndex: Int) -> some View {
+    private func row(_ tool: ToolDescriptor) -> some View {
         let state = registry.state(of: tool)
         let availability = registry.availability(of: tool)
         let isSelected = selectedID == tool.id
@@ -227,7 +248,7 @@ public struct LauncherView: View {
             tool: tool,
             state: state,
             availability: availability,
-            quickIndex: quickIndex,
+            globalHotkey: hotkeyLabel(tool),
             isSelected: isSelected,
             registry: registry,
             onOpen: { open(tool) },
@@ -238,10 +259,16 @@ public struct LauncherView: View {
             onMoveUp: { registry.movePinned(tool.id, offset: -1) },
             onMoveDown: { registry.movePinned(tool.id, offset: 1) },
             onConfig: {
-                if availability == .disabled { onToggleEnabled(tool.id) }
-                if tool.id == "clipboard" { onOpenConfig(.clipboard) }
-                else if tool.id == "screenshots" { onOpenConfig(.screenshots) }
-                else { onToggleEnabled(tool.id) }
+                // 有独立配置页的工具直达；带热键的进快捷键页；其余进插件管理。
+                if tool.id == "clipboard" {
+                    onOpenConfig(.clipboard)
+                } else if tool.id == "screenshots" {
+                    onOpenConfig(.screenshots)
+                } else if tool.hotkeyID != nil {
+                    onOpenSettings(.hotkeys)
+                } else {
+                    onOpenSettings(.plugins)
+                }
             },
             onToggleEnabled: {
                 onToggleEnabled(tool.id)
@@ -277,20 +304,23 @@ public struct LauncherView: View {
     // MARK: 底栏（36pt）
 
     private var footer: some View {
-        HStack {
-            Text("单击整行直达 · 拖拽或点 ↑↓ 调整置顶顺序")
-            Spacer()
-            HStack(spacing: 12) {
-                hint("⌘1-9", "秒开")
-                hint("↑↓", "选择")
-                hint("↵", "打开")
+        ZStack {
+            OB.glassFooter.allowsHitTesting(false)
+            WindowDragRegion()
+            HStack {
+                Text("单击整行直达 · 拖拽或点 ↑↓ 调整置顶顺序")
+                Spacer(minLength: 0)
+                HStack(spacing: 12) {
+                    hint("↑↓", "选择")
+                    hint("↵", "打开")
+                }
             }
+            .font(.system(size: 11.5))
+            .foregroundColor(OB.ink3)
+            .padding(.horizontal, 14)
+            .allowsHitTesting(false)
         }
-        .font(.system(size: 11.5))
-        .foregroundColor(OB.ink3)
-        .padding(.horizontal, 14)
         .frame(height: 36)
-        .background(OB.glassFooter)
         .overlay(alignment: .top) { Divider().overlay(OB.hairline) }
     }
 
@@ -305,7 +335,7 @@ public struct LauncherView: View {
 
     private func installKeyboardMonitor() {
         keyboardMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak registry] event in
-            guard let registry, event.window?.contentView?.window is NSWindow else { return event }
+            guard registry != nil, event.window?.contentView?.window is NSWindow else { return event }
 
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             let hasCommand = flags.contains(.command)
@@ -313,14 +343,6 @@ public struct LauncherView: View {
             if hasCommand, let key = event.charactersIgnoringModifiers, key.lowercased() == "k" {
                 searchFocused = true
                 return nil
-            }
-            if hasCommand, let digit = event.charactersIgnoringModifiers, digit.range(of: "^[1-9]$", options: .regularExpression) != nil {
-                let index = Int(digit)! - 1
-                if index < enabledOrdered.count {
-                    open(enabledOrdered[index])
-                    return nil
-                }
-                return event
             }
             guard !hasCommand else { return event }
             switch event.specialKey {
@@ -371,19 +393,61 @@ public struct LauncherView: View {
     }
 }
 
-private func iconButton(_ icon: OBIcon.ID, title: String, action: @escaping () -> Void) -> some View {
-    Button(action: action) {
-        OBIcon(icon, size: 15, weight: 1.9)
-            .foregroundColor(OB.ink2)
-            .frame(width: 28, height: 28)
-            .background(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(Color.clear)
-            )
-            .contentShape(Rectangle())
+private struct LauncherIconButton: View {
+    let icon: OBIcon.ID
+    let title: String
+    let action: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            OBIcon(icon, size: 15.5, weight: 1.6)
+                .foregroundColor(isHovering ? OB.ink : OB.ink2)
+                .frame(width: 28, height: 28)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(isHovering ? OB.surfaceHover : OB.surfaceSubtle)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .strokeBorder(isHovering ? OB.hairline : OB.surfaceSubtle, lineWidth: 0.5)
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .help(title)
+        .animation(.easeInOut(duration: 0.12), value: isHovering)
     }
-    .buttonStyle(.plain)
-    .help(title)
+}
+
+private struct LauncherRowMiniButton: View {
+    let icon: OBIcon.ID
+    let title: String
+    var filled: Bool = false
+    let action: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            OBIcon(icon, size: 13, weight: 1.55)
+                .foregroundColor(filled ? OB.brandYellowInk : (isHovering ? OB.ink : OB.ink2))
+                .frame(width: 24, height: 24)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(filled ? OB.brandYellowSoft : (isHovering ? OB.surfaceActive : OB.surfaceSubtle))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .strokeBorder(isHovering ? OB.hairline : Color.clear, lineWidth: 0.5)
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .help(title)
+        .animation(.easeInOut(duration: 0.12), value: isHovering)
+    }
 }
 
 // MARK: - 工具行视图
@@ -392,7 +456,7 @@ struct ToolRowView: View {
     let tool: ToolDescriptor
     let state: ToolRuntimeState
     let availability: ToolAvailability
-    let quickIndex: Int
+    let globalHotkey: String?
     let isSelected: Bool
     let registry: ToolRegistry
     let onOpen: () -> Void
@@ -409,29 +473,30 @@ struct ToolRowView: View {
     var body: some View {
         HStack(spacing: 11) {
             // squircle 图标
-            OBIcon(tool.iconID, size: 17)
-                .foregroundColor(Color(flexibleHex: tool.fgHex))
+            let fgColor = Color(flexibleHex: tool.fgHex)
+            let bgColor = Color(flexibleHex: tool.bgHex)
+
+            OBIcon(tool.iconID, size: 17.5, weight: 1.65)
+                .foregroundColor(fgColor)
                 .frame(width: 34, height: 34)
                 .background(
                     RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .fill(Color(flexibleHex: tool.bgHex))
+                        .fill(bgColor)
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .strokeBorder(Color(red: 15/255, green: 23/255, blue: 42/255, opacity: 0.06), lineWidth: 0.5)
+                        .strokeBorder(fgColor.opacity(0.18), lineWidth: 0.5)
                 )
+                .shadow(color: fgColor.opacity(0.08), radius: 2, x: 0, y: 1)
 
-            // 名称 + 描述
-            VStack(alignment: .leading, spacing: 1) {
+            // 名称 + 热键提示（替代原描述文案）
+            VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
-                    if availability == .enabled {
-                        StatusDot(standby: tool.id != "clipboard")
-                    }
                     Text(tool.name)
                         .font(.system(size: 13.5, weight: .medium))
                         .foregroundColor(isSelected ? OB.accentInk : OB.ink)
                     if availability == .disabled {
-                        Text("· 未启用（0 内存）")
+                        Text("· 未启用")
                             .font(.system(size: 10.5, weight: .medium))
                             .foregroundColor(OB.ink3)
                     } else if availability == .planned {
@@ -440,20 +505,19 @@ struct ToolRowView: View {
                             .foregroundColor(OB.ink3)
                     }
                 }
-                Text(tool.desc)
-                    .font(.system(size: 11.5))
-                    .foregroundColor(OB.ink3)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                subtitleHint
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            // 右侧操作
+            // 右侧操作：快捷动作 / 悬停操作，设置齿轮始终在最右
             HStack(spacing: 6) {
                 if isHovering || isSelected {
                     hoverActions
                 }
-                trailingControls
+                trailingActions
+                if tool.isInstalled, availability != .planned {
+                    miniAction(.gear, title: "打开工具配置") { onConfig() }
+                }
             }
         }
         .padding(.horizontal, 10)
@@ -483,10 +547,18 @@ struct ToolRowView: View {
                 onDragOver: { isDragOver = $0 }
             )
         )
+        .overlay(alignment: .leading) {
+            if isSelected {
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(OB.brandYellow)
+                    .frame(width: 3, height: 22)
+                    .padding(.leading, 3)
+            }
+        }
         .overlay(alignment: .top) {
             if isDragOver {
                 RoundedRectangle(cornerRadius: 1)
-                    .fill(OB.accent)
+                    .fill(OB.brandYellow)
                     .frame(height: 2)
                     .padding(.horizontal, 4)
             }
@@ -512,14 +584,49 @@ struct ToolRowView: View {
                     miniAction(.chevronDown, title: "下移排序") { onMoveDown() }
                 }
                 miniAction(.pin, title: state.pinned ? "取消置顶" : "置顶", filled: state.pinned) { onPin() }
-                miniAction(.gear, title: "工具配置") { onConfig() }
                 miniAction(.power, title: state.enabled ? "停用释放内存" : "启用") { onToggleEnabled() }
             }
         }
     }
 
+    /// 标题下提示：有全局热键时说明「按什么键能干什么」；否则回退短状态文案。
     @ViewBuilder
-    private var trailingControls: some View {
+    private var subtitleHint: some View {
+        if let globalHotkey, globalHotkey != "—", !globalHotkey.isEmpty, let action = hotkeyActionHint {
+            HStack(spacing: 6) {
+                Kbd(text: globalHotkey)
+                Text(action)
+                    .font(.system(size: 11.5))
+                    .foregroundColor(OB.ink3)
+                    .lineLimit(1)
+            }
+        } else {
+            Text(fallbackSubtitle)
+                .font(.system(size: 11.5))
+                .foregroundColor(OB.ink3)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+    }
+
+    /// 各工具热键动作说明（比通用 desc 更直接）。
+    private var hotkeyActionHint: String? {
+        switch tool.id {
+        case "clipboard": return "快速打开粘贴历史"
+        case "screenshots": return "快速截图"
+        case "color-picker": return "快速取色"
+        default: return nil
+        }
+    }
+
+    private var fallbackSubtitle: String {
+        if availability == .planned { return "后续版本扩展" }
+        if availability == .disabled { return "启用后可在此使用" }
+        return tool.desc
+    }
+
+    @ViewBuilder
+    private var trailingActions: some View {
         if availability == .enabled, let quick = tool.quickAction {
             Button {
                 onQuickAction(quick.destination)
@@ -548,35 +655,15 @@ struct ToolRowView: View {
                     .frame(height: 24)
                     .background(
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(Color(red: 15/255, green: 23/255, blue: 42/255, opacity: 0.06))
+                            .fill(OB.btnFill)
                     )
             }
             .buttonStyle(.plain)
         }
-
-        // ⌘1-9 或全局快捷键
-        if availability == .enabled, quickIndex >= 1, quickIndex <= 9 {
-            Kbd(text: "⌘\(quickIndex)")
-        } else if availability == .enabled, let shortcut = tool.defaultShortcut, shortcut != "—" {
-            Text(shortcut)
-                .font(.system(size: 11).monospaced())
-                .foregroundColor(OB.ink3)
-        }
     }
 
     private func miniAction(_ icon: OBIcon.ID, title: String, filled: Bool = false, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            OBIcon(icon, size: 13, weight: 1.9)
-                .foregroundColor(filled ? OB.accent : OB.ink3)
-                .frame(width: 24, height: 24)
-                .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(isHovering ? Color(red: 15/255, green: 23/255, blue: 42/255, opacity: 0.08) : Color.clear)
-                )
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help(title)
+        LauncherRowMiniButton(icon: icon, title: title, filled: filled, action: action)
     }
 }
 

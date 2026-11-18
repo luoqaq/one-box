@@ -5,6 +5,7 @@ import ClipboardHistory
 import ClipboardStore
 import CaptureStore
 import ScreenCapture
+import ColorPicker
 
 // MARK: - 应用模型：依赖组装 + 列表缓存 + Toast
 
@@ -16,6 +17,7 @@ public final class AppModel: ObservableObject {
     public let captureStore: CaptureStore
     public let clipboardService: ClipboardHistoryService
     public let captureService: ScreenCaptureService
+    public let colorPickService: ColorPickService
 
     @Published public private(set) var clipboardRecords: [ClipboardRecord] = []
     @Published public private(set) var captures: [CaptureRecord] = []
@@ -30,6 +32,7 @@ public final class AppModel: ObservableObject {
         self.captureStore = try CaptureStore()
         self.clipboardService = ClipboardHistoryService(store: clipboardStore)
         self.captureService = ScreenCaptureService()
+        self.colorPickService = ColorPickService()
         clipboardService.onRecordsChanged = { [weak self] in
             self?.reloadClipboardRecords()
         }

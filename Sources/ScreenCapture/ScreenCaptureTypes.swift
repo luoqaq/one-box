@@ -21,31 +21,12 @@ public struct CapturedImage: Sendable {
     }
 }
 
-/// 选区确认后的动作，由调用方决定后续流程。
-public enum SelectionAction: Sendable, Equatable {
-    /// 进入标注编辑器。
-    case annotate
-    /// 写入剪贴板。
-    case copy
-    /// 保存为 PNG 文件。
-    case save
-
-    /// dock / 提示胶囊里展示的按钮文案。
-    var title: String {
-        switch self {
-        case .annotate: return "标注"
-        case .copy: return "复制"
-        case .save: return "保存"
-        }
-    }
-}
-
-/// 选区交互的最终结果：取消，或带着动作返回截图。
+/// 选区 / 贴图标注交互的最终结果：取消，或返回可直接复制的截图。
 public enum SelectionOutcome: Sendable {
     /// 用户按 Esc、点击「取消」或选区无效。
     case canceled
-    /// 确认选区并完成捕获。
-    case selected(CapturedImage, action: SelectionAction)
+    /// 确认后得到的最终图像（已含标注，若有）。
+    case selected(CapturedImage)
 }
 
 /// 截图相关错误。notAuthorized 附带系统设置恢复路径文案。

@@ -3,3 +3,6 @@
 *.xcodeproj
 DerivedData/
 Scripts/build/
+
+# Logo 探索中间稿（正式资源在 Resources/）
+prototypes/logo-exploration/

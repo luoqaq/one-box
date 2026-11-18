@@ -1,9 +1,10 @@
 # OneBox V1 产品与技术方案
 
-更新日期：2026-11-17  
+更新日期：2026-11-18  
 平台：macOS 菜单栏 App  
 证据来源：[平台能力调研](research/desktop-platform-evidence.md)、[MyGo / NSH / NSGo 评估](research/mygo-nsh-evaluation.md)
 详细设计：[原生架构设计](architecture.md)
+实现现状：[PROJECT_MEMORY.md](../PROJECT_MEMORY.md)
 
 ## 首屏结论
 
@@ -79,15 +80,29 @@ MyGo 可以作为备选试验方案：它已覆盖 tray、全局快捷键和富�
 ```text
 OneBox
 ├─ App / MenuBar          菜单栏入口、偏好设置、快捷键注册
-├─ ToolRegistry           工具描述、分类、固定状态、快捷键元数据
+├─ HotKeys                热键规格与匹配
+├─ ToolRegistry           工具描述、分类、固定状态
 ├─ ToolLauncherUI         工具箱、搜索、分类、最近使用和工具详情
 ├─ ClipboardHistory       changeCount 轮询、内容采集、去重、自写抑制
 ├─ ClipboardStore         本地元数据存储、图片文件、缩略图、清理策略
-├─ ClipboardHistoryUI     搜索、列表、图片预览、复制/置顶/删除
+├─ OneBoxUI               工作台 UI（剪贴板 / 截图 / 设置 / 标注）
 ├─ ScreenCapture          屏幕权限、跨屏选区、ScreenCaptureKit 捕获
 ├─ Annotation             箭头/文字/矩形/打码与 PNG 渲染导出
-└─ RecentCaptures         最近截图记录与复制/打开操作
+├─ CaptureStore           最近截图记录与复制/打开操作
+└─ ColorPicker            屏幕取色与色值格式化
 ```
+
+### 3. 屏幕取色器（已纳入实现）
+
+**做什么**
+
+- 全局快捷键或工具箱快捷动作进入全屏取色。
+- 吸取屏幕像素，复制 HEX / RGB / OKLCH。
+- 作为可启用工具注册；默认关闭，不强制占用热键。
+
+**明确不做**
+
+- 不做色板管理、对比度检测、设计系统同步。
 
 ### 技术选择
 

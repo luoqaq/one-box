@@ -8,8 +8,8 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-TEST_ROOT="/tmp/onebox-tests"
-MODULES=(ToolRegistry ClipboardStore CaptureStore ClipboardHistory Annotation ScreenCapture)
+TEST_ROOT="/tmp/onebox-tests-$$"
+MODULES=(HotKeys ToolRegistry ClipboardStore CaptureStore ClipboardHistory Annotation ScreenCapture ColorPicker)
 
 rm -rf "$TEST_ROOT"
 mkdir -p "$TEST_ROOT/Sources" "$TEST_ROOT/Tests"
@@ -29,18 +29,22 @@ let package = Package(
     name: "OneBoxTests",
     platforms: [.macOS("15.2")],
     targets: [
+        .target(name: "HotKeys"),
         .target(name: "ToolRegistry"),
         .target(name: "ClipboardStore"),
         .target(name: "CaptureStore"),
         .target(name: "ClipboardHistory", dependencies: ["ClipboardStore"]),
         .target(name: "Annotation"),
-        .target(name: "ScreenCapture"),
+        .target(name: "ScreenCapture", dependencies: ["Annotation"]),
+        .target(name: "ColorPicker"),
+        .testTarget(name: "HotKeysTests", dependencies: ["HotKeys"]),
         .testTarget(name: "ToolRegistryTests", dependencies: ["ToolRegistry"]),
         .testTarget(name: "ClipboardStoreTests", dependencies: ["ClipboardStore"]),
         .testTarget(name: "CaptureStoreTests", dependencies: ["CaptureStore"]),
         .testTarget(name: "ClipboardHistoryTests", dependencies: ["ClipboardHistory"]),
         .testTarget(name: "AnnotationTests", dependencies: ["Annotation"]),
         .testTarget(name: "ScreenCaptureTests", dependencies: ["ScreenCapture"]),
+        .testTarget(name: "ColorPickerTests", dependencies: ["ColorPicker"]),
     ],
     swiftLanguageModes: [.v5]
 )

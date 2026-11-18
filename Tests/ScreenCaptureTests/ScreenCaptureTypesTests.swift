@@ -3,8 +3,7 @@ import Testing
 import CoreGraphics
 @testable import ScreenCapture
 
-/// 公开类型语义测试：错误文案、SelectionAction Equatable、SelectionOutcome 模式匹配。
-/// 注：本仓库测试统一使用 swift-testing（本机 CLT 环境没有 XCTest 运行时）。
+/// 公开类型语义测试：错误文案、SelectionOutcome 模式匹配。
 @Suite
 struct ScreenCaptureTypesTests {
 
@@ -37,22 +36,6 @@ struct ScreenCaptureTypesTests {
         #expect(text.contains("SCStream 超时"))
     }
 
-    // MARK: - SelectionAction Equatable
-
-    @Test func selectionActionEquality() {
-        #expect(SelectionAction.annotate == SelectionAction.annotate)
-        #expect(SelectionAction.copy == SelectionAction.copy)
-        #expect(SelectionAction.save == SelectionAction.save)
-        #expect(SelectionAction.annotate != SelectionAction.copy)
-        #expect(SelectionAction.copy != SelectionAction.save)
-        #expect(SelectionAction.save != SelectionAction.annotate)
-    }
-
-    @Test func selectionActionSetSemantics() {
-        let actions: Set<SelectionAction> = [.annotate, .copy, .save, .annotate]
-        #expect(actions.count == 3)
-    }
-
     // MARK: - SelectionOutcome
 
     /// 构造 1×1 测试图（不依赖真实捕获）。
@@ -79,9 +62,9 @@ struct ScreenCaptureTypesTests {
             pointSize: CGSize(width: 100, height: 50),
             pixelSize: CGSize(width: 200, height: 100)
         )
-        let outcome: SelectionOutcome = .selected(captured, action: .copy)
+        let outcome: SelectionOutcome = .selected(captured)
 
-        guard case .selected(let returned, let action) = outcome else {
+        guard case .selected(let returned) = outcome else {
             Issue.record("应为 selected")
             return
         }
@@ -89,7 +72,6 @@ struct ScreenCaptureTypesTests {
         #expect(returned.pointSize == CGSize(width: 100, height: 50))
         #expect(returned.pixelSize == CGSize(width: 200, height: 100))
         #expect(returned.pngData == Data([0x89, 0x50, 0x4E, 0x47]))
-        #expect(action == .copy)
     }
 
     @Test func selectionOutcomeCanceledPattern() {
@@ -124,5 +106,69 @@ struct ScreenCaptureTypesTests {
         #expect(captured.pngData.isEmpty)
         #expect(captured.pointSize == CGSize(width: 300, height: 200))
         #expect(captured.pixelSize == CGSize(width: 600, height: 400))
+    }
+
+    // MARK: - composite 方向
+
+    /// 上半红、下半蓝的测试图（不依赖屏幕捕获）。
+    private func topRedBottomBlueImage(width: Int, height: Int) -> CGImage {
+        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
+        let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+        // 位图上下文左下原点：y=0 是图像底部。
+        context.setFillColor(CGColor(srgbRed: 0, green: 0, blue: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height / 2)))
+        context.setFillColor(CGColor(srgbRed: 1, green: 0, blue: 0, alpha: 1))
+        context.fill(CGRect(x: 0, y: CGFloat(height / 2), width: CGFloat(width), height: CGFloat(height / 2)))
+        return context.makeImage()!
+    }
+
+    /// 同一套无翻转采样：返回缓冲首行/末行的红色通道，用于对比合成前后是否对调。
+    private func edgeRedChannels(of image: CGImage) -> (firstRow: UInt8, lastRow: UInt8) {
+        let w = image.width
+        let h = image.height
+        var buffer = [UInt8](repeating: 0, count: w * h * 4)
+        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
+        buffer.withUnsafeMutableBytes { raw in
+            let context = CGContext(
+                data: raw.baseAddress,
+                width: w,
+                height: h,
+                bitsPerComponent: 8,
+                bytesPerRow: w * 4,
+                space: colorSpace,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            )!
+            context.draw(image, in: CGRect(x: 0, y: 0, width: CGFloat(w), height: CGFloat(h)))
+        }
+        let lastOffset = (h - 1) * w * 4
+        return (buffer[0], buffer[lastOffset])
+    }
+
+    /// 合成不得上下颠倒：粘贴/导出依赖此方向，预览里的 Y 翻转不能掩盖。
+    @Test func compositePreservesVerticalOrientation() throws {
+        let source = topRedBottomBlueImage(width: 8, height: 8)
+        let before = edgeRedChannels(of: source)
+        #expect(before.firstRow != before.lastRow, "夹具两端应可区分")
+
+        let selection = CGRect(x: 100, y: 200, width: 8, height: 8)
+        let merged = try #require(
+            ScreenCaptureService.composite(
+                subImages: [(globalRect: selection, image: source)],
+                selectionRect: selection,
+                canvasSize: CGSize(width: 8, height: 8),
+                scale: 1
+            )
+        )
+        let after = edgeRedChannels(of: merged)
+        #expect(after.firstRow == before.firstRow, "合成后首行被颠倒了：\(before.firstRow) → \(after.firstRow)")
+        #expect(after.lastRow == before.lastRow, "合成后末行被颠倒了：\(before.lastRow) → \(after.lastRow)")
     }
 }

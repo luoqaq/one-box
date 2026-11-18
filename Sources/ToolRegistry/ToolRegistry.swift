@@ -22,12 +22,10 @@ public final class ToolRegistry: ObservableObject {
             loaded = decoded
         }
         if loaded.isEmpty {
-            // 首次启动默认值：两个闭环工具启用 + 置顶，与原型一致。
+            // 首次启动默认值：两个闭环工具启用 + 置顶；取色器默认未启用。
             loaded["clipboard"] = ToolRuntimeState(enabled: true, pinned: true, order: 1, uses: 0)
             loaded["screenshots"] = ToolRuntimeState(enabled: true, pinned: true, order: 2, uses: 0)
             loaded["color-picker"] = ToolRuntimeState(enabled: false, pinned: false, order: 3, uses: 0)
-            loaded["text-tools"] = ToolRuntimeState(enabled: false, pinned: false, order: 4, uses: 0)
-            loaded["qr-code"] = ToolRuntimeState(enabled: false, pinned: false, order: 5, uses: 0)
         }
         var merged: [String: ToolRuntimeState] = [:]
         for tool in tools {
@@ -88,7 +86,7 @@ public final class ToolRegistry: ObservableObject {
         }
     }
 
-    /// 过滤 + 排序后的工具列表（工具箱主列表与 ⌘1-9 使用）。
+    /// 过滤 + 排序后的工具列表（工具箱主列表使用）。
     public func filteredTools(
         filter: LauncherFilter,
         search query: String,
@@ -169,9 +167,14 @@ public final class ToolRegistry: ObservableObject {
         guard pinned.indices.contains(target) else { return }
         let a = pinned[idx].id
         let b = pinned[target].id
-        let tmp = states[a]!.order
-        states[a]!.order = states[b]!.order
-        states[b]!.order = tmp
+        // 整值写回，确保 @Published 发出变更（原地改 Dictionary 内字段不会）。
+        var sa = states[a]!
+        var sb = states[b]!
+        let tmp = sa.order
+        sa.order = sb.order
+        sb.order = tmp
+        states[a] = sa
+        states[b] = sb
         persist()
     }
 
@@ -217,7 +220,7 @@ public final class ToolRegistry: ObservableObject {
                 isInstalled: true,
                 iconID: "clipboard",
                 fgHex: "#007aff",
-                bgHex: "#0c122440",
+                bgHex: "#007aff1c",
                 runtimeLabel: "后台监听中",
                 memoryLabel: "~4 MB（按需缓存）"
             ),
@@ -243,75 +246,17 @@ public final class ToolRegistry: ObservableObject {
                 name: "屏幕取色器",
                 desc: "吸取屏幕颜色并复制 HEX / RGB / OKLCH 色值",
                 category: .developer,
-                keywords: "color picker qs quse 取色 色值 hex rgb",
-                defaultShortcut: nil,
-                destination: nil,
+                keywords: "color picker qs quse 取色 色值 hex rgb oklch",
+                defaultShortcut: "⌃⌥C",
+                hotkeyID: "colorPicker",
+                destination: .colorPicker,
+                quickAction: ToolQuickAction(label: "立即取色", destination: .colorPicker),
                 isInstalled: true,
                 iconID: "eyedropper",
                 fgHex: "#af52de",
                 bgHex: "#af52de1a",
-                runtimeLabel: "未启用",
-                memoryLabel: "0 MB（未加载）"
-            ),
-            ToolDescriptor(
-                id: "text-tools",
-                name: "文本格式工具",
-                desc: "JSON 格式化、去重行、URL 编解码与空白清理",
-                category: .efficiency,
-                keywords: "text json format wb wenben 文本 格式化 去重",
-                defaultShortcut: nil,
-                destination: nil,
-                isInstalled: true,
-                iconID: "text",
-                fgHex: "#0284c7",
-                bgHex: "#0284c71a",
-                runtimeLabel: "未启用",
-                memoryLabel: "0 MB（未加载）"
-            ),
-            ToolDescriptor(
-                id: "qr-code",
-                name: "二维码生成",
-                desc: "本地生成文本、链接或 Wi-Fi 二维码，不上传云端",
-                category: .developer,
-                keywords: "qr code ewm erweima 二维码 链接 wi-fi",
-                defaultShortcut: nil,
-                destination: nil,
-                isInstalled: true,
-                iconID: "qrcode",
-                fgHex: "#e11d48",
-                bgHex: "#e11d481a",
-                runtimeLabel: "未启用",
-                memoryLabel: "0 MB（未加载）"
-            ),
-            ToolDescriptor(
-                id: "file-stash",
-                name: "文件暂存架",
-                desc: "跨窗口拖拽临时暂存文件（后续版本扩展）",
-                category: .efficiency,
-                keywords: "file stash wj 文件 暂存 拖拽",
-                defaultShortcut: nil,
-                destination: nil,
-                isInstalled: false,
-                iconID: "folder",
-                fgHex: "#c96f00",
-                bgHex: "#c96f001c",
-                runtimeLabel: "规划中",
-                memoryLabel: "—"
-            ),
-            ToolDescriptor(
-                id: "window-layout",
-                name: "窗口布局",
-                desc: "保存与一键恢复常用分屏布局（后续版本扩展）",
-                category: .system,
-                keywords: "window layout ck 窗口 布局 分屏",
-                defaultShortcut: nil,
-                destination: nil,
-                isInstalled: false,
-                iconID: "layout",
-                fgHex: "#64748b",
-                bgHex: "#64748b1c",
-                runtimeLabel: "规划中",
-                memoryLabel: "—"
+                runtimeLabel: "热键待命",
+                memoryLabel: "<1 MB（取色时加载）"
             ),
         ]
     }

@@ -265,10 +265,14 @@ public struct ClipboardWorkbenchView: View {
                         }
                     }
                     SettingsRow(title: "工具直达快捷键", desc: "任意应用中按下直接呼出剪贴板列表") {
-                        HotkeyButton(spec: model.settings.hotkeyClipboard) { spec in
+                        HotkeyButton(spec: model.settings.hotkeyClipboard, onRecord: { spec in
                             model.settings.setHotkey(spec, for: "clipboard")
                             model.showToast("快捷键已更新")
-                        }
+                            if !AccessibilityPermission.isTrusted {
+                                _ = AccessibilityPermission.promptIfNeeded()
+                                model.showToast("请在系统设置中允许辅助功能后快捷键才会生效")
+                            }
+                        }, onInvalid: { model.showToast($0) })
                     }
                 }
 
@@ -373,7 +377,7 @@ struct ClipboardPreviewSurface: View {
                 ScrollView {
                     Text(record.textContent ?? "")
                         .font(.system(size: 12.5).monospaced())
-                        .foregroundColor(Color(hex: 0x1F2937))
+                        .foregroundColor(OB.ink)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(EdgeInsets(top: 16, leading: 18, bottom: 16, trailing: 18))
                 }
@@ -389,7 +393,7 @@ struct ClipboardPreviewSurface: View {
         }
         .background(
             RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .fill(Color.white.opacity(0.85))
+                .fill(OB.cardSurface)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 11, style: .continuous)
@@ -422,7 +426,7 @@ struct ImageStage: View {
                         while x < size.width {
                             context.fill(
                                 Path(ellipseIn: CGRect(x: x - r, y: y - r, width: r * 2, height: r * 2)),
-                                with: .color(Color(red: 15/255, green: 23/255, blue: 42/255, opacity: 0.06))
+                                with: .color(OB.surfaceHover)
                             )
                             x += dot
                         }
@@ -443,7 +447,7 @@ struct ImageStage: View {
             }
             .frame(width: geo.size.width, height: geo.size.height)
         }
-        .background(Color(hex: 0xF6F7F9))
+        .background(OB.previewBg)
         .task {
             guard let path = record.imageFile else { return }
             let url = await AppModelImageLoader.url(for: path)
@@ -503,7 +507,7 @@ struct ClipRowView: View {
                     .monospacedDigit()
                 if isHovering || isSelected {
                     Button(action: onQuickCopy) {
-                        OBIcon(.copy, size: 13, weight: 2)
+                        OBIcon(.copy, size: 13, weight: 1.65)
                             .foregroundColor(OB.ink2)
                             .frame(width: 24, height: 24)
                             .background(
@@ -522,6 +526,14 @@ struct ClipRowView: View {
             RoundedRectangle(cornerRadius: 9, style: .continuous)
                 .fill(isSelected ? OB.accentSoft : (isHovering ? OB.surfaceSubtle : Color.clear))
         )
+        .overlay(alignment: .leading) {
+            if isSelected {
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(OB.brandYellow)
+                    .frame(width: 3, height: 22)
+                    .padding(.leading, 3)
+            }
+        }
         .contentShape(Rectangle())
         .onTapGesture { onSelect() }
         .onHover { isHovering = $0 }
@@ -534,7 +546,7 @@ struct ClipRowView: View {
             if record.kind == .image, let thumbPath = record.thumbnailFile {
                 ThumbImageView(path: thumbPath)
             } else {
-                OBIcon(icon.icon, size: 16, weight: 2)
+                OBIcon(icon.icon, size: 16, weight: 1.65)
                     .foregroundColor(icon.color)
                     .frame(width: 36, height: 36)
                     .background(
@@ -543,22 +555,22 @@ struct ClipRowView: View {
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .strokeBorder(Color(red: 15/255, green: 23/255, blue: 42/255, opacity: 0.08), lineWidth: 0.5)
+                            .strokeBorder(OB.hairline, lineWidth: 0.5)
                     )
             }
         }
     }
 
     private var thumbIcon: (icon: OBIcon.ID, color: Color, background: Color) {
-        if record.kind == .image { return (.image, OB.ink2, Color(red: 15/255, green: 23/255, blue: 42/255, opacity: 0.05)) }
+        if record.kind == .image { return (.image, OB.ink2, OB.surfaceSubtle) }
         let text = record.textContent ?? ""
         if text.hasPrefix("http://") || text.hasPrefix("https://") {
             return (.link, OB.green, OB.greenSoft)
         }
         if text.contains("{") || text.contains("func ") || text.contains("import ") || text.contains("\n") {
-            return (.code, Color(hex: 0x5856D6), Color(red: 88/255, green: 86/255, blue: 214/255, opacity: 0.10))
+            return (.code, OB.ink, OB.surfaceHover)
         }
-        return (.lines, OB.ink2, Color(red: 15/255, green: 23/255, blue: 42/255, opacity: 0.05))
+        return (.lines, OB.ink2, OB.surfaceSubtle)
     }
 
     private var title: String {
@@ -590,14 +602,14 @@ struct ThumbImageView: View {
                     .resizable()
                     .aspectRatio(contentMode: .fill)
             } else {
-                Color(hex: 0xF5F7FA)
+                OB.previewBg
             }
         }
         .frame(width: 36, height: 36)
         .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .strokeBorder(Color(red: 15/255, green: 23/255, blue: 42/255, opacity: 0.08), lineWidth: 0.5)
+                .strokeBorder(OB.hairline, lineWidth: 0.5)
         )
         .task {
             if let url = await AppModelImageLoader.url(for: path), let data = try? Data(contentsOf: url) {

@@ -1,4 +1,5 @@
 import SwiftUI
+import HotKeys
 import ToolLauncherUI
 import ToolRegistry
 
@@ -17,6 +18,7 @@ public struct ToolWorkbenchShell<Content: View>: View {
             .background(GlassPanelBackground())
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .preferredColorScheme(.light)
+            .tint(OB.accent)
     }
 }
 
@@ -34,25 +36,30 @@ public struct ToolTopbar<Trailing: View>: View {
     }
 
     public var body: some View {
-        HStack(spacing: 10) {
-            Button(action: onBack) {
-                OBIcon(.chevronLeft, size: 15, weight: 2)
-                    .foregroundColor(OB.ink2)
-                    .frame(width: 28, height: 28)
-                    .contentShape(Rectangle())
+        ZStack {
+            OB.glassHeader.allowsHitTesting(false)
+            WindowDragRegion()
+            HStack(spacing: 10) {
+                Button(action: onBack) {
+                    OBIcon(.chevronLeft, size: 15, weight: 1.65)
+                        .foregroundColor(OB.ink2)
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("返回百宝袋")
+
+                Text(title)
+                    .font(.system(size: 13.5, weight: .semibold))
+                    .allowsHitTesting(false)
+
+                Spacer(minLength: 0)
+                    .allowsHitTesting(false)
+                trailing()
             }
-            .buttonStyle(.plain)
-            .help("返回工具箱")
-
-            Text(title)
-                .font(.system(size: 13.5, weight: .semibold))
-
-            Spacer()
-            trailing()
+            .padding(.horizontal, 12)
         }
-        .padding(.horizontal, 12)
         .frame(height: 50)
-        .background(OB.glassHeader)
         .overlay(alignment: .bottom) { Divider().overlay(OB.hairline) }
     }
 }
@@ -70,7 +77,7 @@ public struct InlineSearchField: View {
 
     public var body: some View {
         HStack(spacing: 8) {
-            OBIcon(.search, size: 14, weight: 2)
+            OBIcon(.search, size: 14, weight: 1.65)
                 .foregroundColor(OB.ink3)
             TextField(placeholder, text: $text)
                 .textFieldStyle(.plain)
@@ -80,11 +87,11 @@ public struct InlineSearchField: View {
         .frame(height: 32)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color(red: 15/255, green: 23/255, blue: 42/255, opacity: 0.045))
+                .fill(OB.surfaceSubtle)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(Color(red: 15/255, green: 23/255, blue: 42/255, opacity: 0.06), lineWidth: 0.5)
+                .strokeBorder(OB.hairline, lineWidth: 0.5)
         )
     }
 }
@@ -129,7 +136,7 @@ public struct SettingsCard<Content: View>: View {
         VStack(spacing: 0) { content() }
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.white.opacity(0.86))
+                    .fill(OB.cardSurface)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -188,7 +195,7 @@ public struct StepperView: View {
             } label: {
                 Text("−").font(.system(size: 14))
                     .frame(width: 24, height: 24)
-                    .background(RoundedRectangle(cornerRadius: 6).fill(Color(red: 15/255, green: 23/255, blue: 42/255, opacity: 0.06)))
+                    .background(RoundedRectangle(cornerRadius: 6).fill(OB.btnFill))
             }
             .buttonStyle(.plain)
             Text("\(value)\(unit)")
@@ -200,7 +207,7 @@ public struct StepperView: View {
             } label: {
                 Text("＋").font(.system(size: 14))
                     .frame(width: 24, height: 24)
-                    .background(RoundedRectangle(cornerRadius: 6).fill(Color(red: 15/255, green: 23/255, blue: 42/255, opacity: 0.06)))
+                    .background(RoundedRectangle(cornerRadius: 6).fill(OB.btnFill))
             }
             .buttonStyle(.plain)
         }
@@ -216,13 +223,23 @@ public struct StepperView: View {
 public struct HotkeyButton: View {
     let spec: HotKeySpec
     let onRecord: (HotKeySpec) -> Void
+    var onInvalid: ((String) -> Void)?
 
     @State private var isRecording = false
-    @State private var monitor: Any?
+    @State private var keyMonitor: Any?
+    @State private var flagsMonitor: Any?
+    @State private var recorder = HotkeyRecorder()
+    @State private var flagTracker = ModifierFlagTracker()
+    @State private var previousFlagRaw: UInt = 0
 
-    public init(spec: HotKeySpec, onRecord: @escaping (HotKeySpec) -> Void) {
+    public init(
+        spec: HotKeySpec,
+        onRecord: @escaping (HotKeySpec) -> Void,
+        onInvalid: ((String) -> Void)? = nil
+    ) {
         self.spec = spec
         self.onRecord = onRecord
+        self.onInvalid = onInvalid
     }
 
     public var body: some View {
@@ -233,11 +250,11 @@ public struct HotkeyButton: View {
                 if isRecording {
                     Text("按下快捷键…")
                         .font(.system(size: 11.5, weight: .medium))
-                        .foregroundColor(OB.accentInk)
+                        .foregroundColor(OB.brandYellowInk)
                 } else {
                     HStack(spacing: 3) {
-                        ForEach(Array(spec.display), id: \.self) { ch in
-                            Kbd(text: String(ch))
+                        ForEach(Array(spec.displayTokens.enumerated()), id: \.offset) { _, token in
+                            Kbd(text: token)
                         }
                     }
                 }
@@ -246,46 +263,89 @@ public struct HotkeyButton: View {
             .frame(height: 28)
             .background(
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(isRecording ? OB.accentSoft : Color(red: 15/255, green: 23/255, blue: 42/255, opacity: 0.045))
+                    .fill(isRecording ? OB.brandYellowSoft : OB.surfaceSubtle)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .strokeBorder(isRecording ? OB.accent : OB.hairline, lineWidth: 0.5)
+                    .strokeBorder(isRecording ? OB.brandYellow : OB.hairline, lineWidth: isRecording ? 1 : 0.5)
             )
         }
         .buttonStyle(.plain)
     }
 
     private func startRecording() {
+        stopMonitors()
         isRecording = true
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            var mods: Set<HotKeySpec.Modifier> = []
-            if flags.contains(.control) { mods.insert(.control) }
-            if flags.contains(.option) { mods.insert(.option) }
-            if flags.contains(.shift) { mods.insert(.shift) }
-            if flags.contains(.command) { mods.insert(.command) }
-            stopRecording()
-            // 修饰键单独按下不算快捷键；至少一个修饰键 + 普通键。
-            if !mods.isEmpty, event.keyCode != 54, event.keyCode != 55, event.keyCode != 56,
-               event.keyCode != 57, event.keyCode != 58, event.keyCode != 59, event.keyCode != 60,
-               event.keyCode != 61, event.keyCode != 62, event.keyCode != 63 {
-                onRecord(HotKeySpec(keyCode: Int(event.keyCode), modifiers: mods))
+        recorder.reset()
+        flagTracker.reset()
+        previousFlagRaw = 0
+
+        let handle: (HotkeyRecorder.Outcome) -> Void = { outcome in
+            switch outcome {
+            case .completed(let newSpec):
+                stopMonitors()
+                isRecording = false
+                onRecord(newSpec)
+            case .invalid(let message):
+                onInvalid?(message)
+            case .cancelled:
+                stopMonitors()
+                isRecording = false
+            case .ignore:
+                break
+            }
+        }
+
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            let code = Int(event.keyCode)
+            // 修饰键由 flagsChanged 处理，避免重复计数。
+            if ModifierKey.fromKeyCode(code) != nil { return nil }
+            handle(recorder.keyDown(keyCode: code, at: Date()))
+            return nil
+        }
+
+        flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
+            guard let mod = ModifierKey.fromKeyCode(Int(event.keyCode)) else { return event }
+            let flag: NSEvent.ModifierFlags
+            switch mod.kind {
+            case .control: flag = .control
+            case .option: flag = .option
+            case .shift: flag = .shift
+            case .command: flag = .command
+            }
+            let previous = NSEvent.ModifierFlags(rawValue: previousFlagRaw)
+            let wasDown = previous.contains(flag)
+            let isDown = event.modifierFlags.contains(flag)
+            previousFlagRaw = event.modifierFlags.intersection(.deviceIndependentFlagsMask).rawValue
+            for transition in flagTracker.apply(key: mod, kindWasDown: wasDown, kindIsDown: isDown) {
+                switch transition {
+                case .down(let key):
+                    handle(recorder.modifierDown(key, at: Date()))
+                case .up(let key):
+                    handle(recorder.modifierUp(key, at: Date()))
+                }
             }
             return nil
         }
-        // 6 秒未录制到就自动退出录制态
+
         DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
-            if isRecording { stopRecording() }
+            if isRecording {
+                stopMonitors()
+                isRecording = false
+            }
         }
     }
 
-    private func stopRecording() {
-        if let monitor {
-            NSEvent.removeMonitor(monitor)
-            self.monitor = nil
+    private func stopMonitors() {
+        if let keyMonitor {
+            NSEvent.removeMonitor(keyMonitor)
+            self.keyMonitor = nil
         }
-        isRecording = false
+        if let flagsMonitor {
+            NSEvent.removeMonitor(flagsMonitor)
+            self.flagsMonitor = nil
+        }
+        recorder.reset()
     }
 }
 
@@ -302,7 +362,7 @@ public struct PathChip: View {
             .frame(height: 28)
             .background(
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(Color(red: 15/255, green: 23/255, blue: 42/255, opacity: 0.045))
+                    .fill(OB.surfaceSubtle)
             )
     }
 }
@@ -365,7 +425,7 @@ public struct ConfirmModal: View {
 
     public var body: some View {
         ZStack {
-            Color(red: 15/255, green: 23/255, blue: 42/255, opacity: 0.24)
+            OB.scrim
                 .background(.ultraThinMaterial)
                 .onTapGesture { onCancel() }
 
@@ -388,11 +448,11 @@ public struct ConfirmModal: View {
             .frame(width: 340)
             .background(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color.white.opacity(0.94))
+                    .fill(OB.modalSurface)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(Color(red: 15/255, green: 23/255, blue: 42/255, opacity: 0.12), lineWidth: 0.5)
+                    .strokeBorder(OB.borderStrong, lineWidth: 0.5)
             )
         }
     }
@@ -432,7 +492,7 @@ public struct EmptyBoxView: View {
                 .frame(width: 48, height: 48)
                 .background(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color(red: 15/255, green: 23/255, blue: 42/255, opacity: 0.05))
+                        .fill(OB.surfaceSubtle)
                 )
                 .padding(.bottom, 12)
             Text(title)
@@ -470,7 +530,7 @@ public struct BannerCard: View {
 
     public var body: some View {
         HStack(spacing: 12) {
-            OBIcon(.warning, size: 18, weight: 2)
+            OBIcon(.warning, size: 18, weight: 1.65)
                 .foregroundColor(accent)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
@@ -486,7 +546,7 @@ public struct BannerCard: View {
         .padding(14)
         .background(
             RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .fill(Color.white.opacity(0.88))
+                .fill(OB.glass)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 11, style: .continuous)
@@ -509,6 +569,7 @@ public struct OBIconButton: View {
     var isActive = false
     let title: String
     let action: () -> Void
+    @State private var isHovering = false
 
     public init(_ icon: OBIcon.ID, isActive: Bool = false, title: String, action: @escaping () -> Void) {
         self.icon = icon
@@ -519,16 +580,23 @@ public struct OBIconButton: View {
 
     public var body: some View {
         Button(action: action) {
-            OBIcon(icon, size: 15, weight: 1.9)
-                .foregroundColor(isActive ? OB.accentInk : OB.ink2)
+            OBIcon(icon, size: 15.5, weight: 1.6)
+                .foregroundColor(isActive ? OB.accentInk : (isHovering ? OB.ink : OB.ink2))
                 .frame(width: 28, height: 28)
                 .background(
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(isActive ? OB.accentSoft : Color.clear)
+                        .fill(isActive ? OB.accentSoft : (isHovering ? OB.surfaceHover : Color.clear))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .strokeBorder(isActive ? OB.borderStrong : (isHovering ? OB.hairline : Color.clear), lineWidth: 0.5)
                 )
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
         .help(title)
+        .animation(.easeInOut(duration: 0.12), value: isHovering)
+        .animation(.easeInOut(duration: 0.12), value: isActive)
     }
 }

@@ -1,48 +1,101 @@
 import SwiftUI
+import AppKit
 
-// MARK: - 颜色（对照 prototypes/v1-module-details/index.html :root）
+// MARK: - 窗口拖动区（NSHostingView 默认不转发背景拖动）
+
+/// 铺满父视图；`mouseDown` 转给 `NSWindow.performDrag`（比 `mouseDownCanMoveWindow` 可靠）。
+/// 放在 ZStack 最底层，交互控件叠在上面；标题/Spacer 建议 `.allowsHitTesting(false)` 以便从文字处也能拖。
+public struct WindowDragRegion: View {
+    public init() {}
+
+    public var body: some View {
+        DragNSRepr()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .allowsHitTesting(true)
+    }
+}
+
+private struct DragNSRepr: NSViewRepresentable {
+    func makeNSView(context: Context) -> DragNSView { DragNSView() }
+    func updateNSView(_ nsView: DragNSView, context: Context) {}
+}
+
+private final class DragNSView: NSView {
+    override func mouseDown(with event: NSEvent) {
+        window?.performDrag(with: event)
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
+// MARK: - 颜色（方案 B：黑白极简主控件 + 明黄点缀）
 
 public enum OB {
-    public static let ink = Color(hex: 0x111318)
-    public static let ink2 = Color(hex: 0x4F5664)
-    public static let ink3 = Color(hex: 0x8A919E)
+    // MARK: 中性文字
+    public static let ink = Color(hex: 0x18181B)
+    /// 次级文字：略加深，避免玻璃底上发灰发虚。
+    public static let ink2 = Color(hex: 0x52525B)
+    public static let ink3 = Color(hex: 0x71717A)
 
-    public static let hairline = Color(red: 15/255, green: 23/255, blue: 42/255, opacity: 0.08)
-    public static let surfaceSubtle = Color(red: 15/255, green: 23/255, blue: 42/255, opacity: 0.035)
-    public static let surfaceHover = Color(red: 15/255, green: 23/255, blue: 42/255, opacity: 0.048)
+    // MARK: 中性表面与边框（统一炭灰阶梯，避免各处散落不同透明度）
+    public static let hairline = Color(red: 24/255, green: 24/255, blue: 27/255, opacity: 0.08)
+    public static let borderStrong = Color(red: 24/255, green: 24/255, blue: 27/255, opacity: 0.14)
+    public static let surfaceSubtle = Color(red: 24/255, green: 24/255, blue: 27/255, opacity: 0.04)
+    public static let surfaceHover = Color(red: 24/255, green: 24/255, blue: 27/255, opacity: 0.065)
+    public static let surfaceActive = Color(red: 24/255, green: 24/255, blue: 27/255, opacity: 0.095)
+    public static let btnFill = surfaceHover
+    public static let scrim = Color(red: 24/255, green: 24/255, blue: 27/255, opacity: 0.24)
+    public static let cardSurface = Color.white.opacity(0.86)
+    public static let modalSurface = Color.white.opacity(0.94)
+    public static let previewBg = Color(hex: 0xF5F5F7)
 
-    public static let accent = Color(hex: 0x007AFF)
-    public static let accentInk = Color(hex: 0x0066D6)
-    public static let accentSoft = Color(red: 0, green: 122/255, blue: 1, opacity: 0.10)
+    // MARK: 主强调色（黑白极简主控件）
+    public static let accent = Color(hex: 0x18181B)
+    public static let accentInk = Color(hex: 0x18181B)
+    public static let accentSoft = Color(red: 24/255, green: 24/255, blue: 27/255, opacity: 0.075)
 
+    // MARK: 品牌点缀黄（呼应黄白 Logo，仅用于小面积焦点、指示条、状态点与徽章）
+    public static let brandYellow = Color(hex: 0xFACC15)
+    public static let brandYellowInk = Color(hex: 0xA16207)
+    public static let brandYellowSoft = Color(red: 250/255, green: 204/255, blue: 21/255, opacity: 0.18)
+
+    // MARK: 语义状态色
     public static let green = Color(hex: 0x1D9A54)
     public static let greenSoft = Color(red: 29/255, green: 154/255, blue: 84/255, opacity: 0.11)
-    public static let orange = Color(hex: 0xC96F00)
+    public static let orange = Color(hex: 0xD97706)
     public static let red = Color(hex: 0xD93025)
     public static let redSoft = Color(red: 217/255, green: 48/255, blue: 37/255, opacity: 0.10)
 
-    /// 玻璃面板底色 rgba(255,255,255,0.78)
-    public static let glass = Color.white.opacity(0.78)
-    public static let glassBar1 = Color.white.opacity(0.42)
-    public static let glassBar2 = Color.white.opacity(0.22)
-    public static let glassFooter = Color.white.opacity(0.36)
-    public static let glassHeader = Color.white.opacity(0.40)
-    public static let configScroll = Color(red: 249/255, green: 250/255, blue: 252/255, opacity: 0.65)
+    /// 玻璃面板底色：略提高不透明度，减轻文字/细线在材质上的发虚感。
+    public static let glass = Color.white.opacity(0.88)
+    public static let glassBar1 = Color.white.opacity(0.55)
+    public static let glassBar2 = Color.white.opacity(0.36)
+    public static let glassFooter = Color.white.opacity(0.48)
+    public static let glassHeader = Color.white.opacity(0.52)
+    public static let sidebarBg = Color(red: 244/255, green: 244/255, blue: 246/255, opacity: 0.78)
+    public static let contentBg = Color(red: 250/255, green: 250/255, blue: 252/255, opacity: 0.92)
+    public static let configScroll = Color(red: 250/255, green: 250/255, blue: 252/255, opacity: 0.80)
 
     /// 标注画布（深色）
-    public static let studioBg = Color(hex: 0x111318)
-    public static let studioWindow = Color(hex: 0x171A21)
-    public static let studioPanel = Color(hex: 0x171A21)
-    public static let studioBar = Color(hex: 0x1B1F27)
-    public static let studioCanvas = Color(hex: 0x12141A)
+    public static let studioBg = Color(hex: 0x111215)
+    public static let studioWindow = Color(hex: 0x16181D)
+    public static let studioPanel = Color(hex: 0x16181D)
+    public static let studioBar = Color(hex: 0x1B1D24)
+    public static let studioCanvas = Color(hex: 0x111215)
     public static let studioSeparator = Color.white.opacity(0.08)
+    public static let studioInk = Color.white
+    public static let studioInk2 = Color.white.opacity(0.76)
+    public static let studioInk3 = Color.white.opacity(0.54)
+    public static let studioSurface = Color.white.opacity(0.06)
+    public static let studioSurfaceHover = Color.white.opacity(0.12)
+    public static let studioBorder = Color.white.opacity(0.12)
 
-    /// 桌面背景（原型 Sequoia 风格渐变）
+    /// 桌面背景（中性暖灰渐变）
     public static let desktopGradient = LinearGradient(
-        colors: [Color(hex: 0xE9EEF4), Color(hex: 0xDFE6EF), Color(hex: 0xE8ECF1)],
+        colors: [Color(hex: 0xECEEF0), Color(hex: 0xE3E6EA), Color(hex: 0xEAECEF)],
         startPoint: .topLeading, endPoint: .bottomTrailing
     )
-    public static let btnFill = Color(red: 15/255, green: 23/255, blue: 42/255, opacity: 0.06)
 }
 
 extension Color {
@@ -56,16 +109,19 @@ extension Color {
         )
     }
 
-    /// 解析工具描述里的 fgHex / bgHex（8 位 ARGB 或 6 位 RGB）。
+    /// 解析工具描述里的 fgHex / bgHex（支持 8 位 RRGGBBAA 或 6 位 RRGGBB）。
     public init(flexibleHex: String) {
         let s = flexibleHex.trimmingCharacters(in: CharacterSet(charactersIn: "# "))
         let value = UInt64(s, radix: 16) ?? 0x8A919E
         if s.count == 8 {
-            let a = Double((value >> 24) & 0xFF) / 255
+            let r = Double((value >> 24) & 0xFF) / 255
+            let g = Double((value >> 16) & 0xFF) / 255
+            let b = Double((value >> 8) & 0xFF) / 255
+            let a = Double(value & 0xFF) / 255
             self.init(.sRGB,
-                      red: Double((value >> 16) & 0xFF) / 255,
-                      green: Double((value >> 8) & 0xFF) / 255,
-                      blue: Double(value & 0xFF) / 255,
+                      red: r,
+                      green: g,
+                      blue: b,
                       opacity: a)
         } else {
             self.init(hex: UInt32(truncatingIfNeeded: value))
@@ -75,14 +131,14 @@ extension Color {
 
 // MARK: - 玻璃面板
 
-/// 原型 .glass-panel：白 0.78 + 模糊 + 0.5px 白描边 + 阴影。
+/// 玻璃面板：material + 半透明白；白层略实，避免正文/小图标对比度被吃掉。
 public struct GlassPanelBackground: View {
 
     public init() {}
     public var body: some View {
         ZStack {
-            Rectangle().fill(.white.opacity(0.55))
-                .background(.ultraThinMaterial)
+            Rectangle().fill(.thinMaterial)
+            Rectangle().fill(Color.white.opacity(0.88))
         }
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -115,11 +171,11 @@ public struct Kbd: View {
             .frame(minWidth: 20, minHeight: 20)
             .background(
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(dark ? Color.white.opacity(0.12) : Color(red: 15/255, green: 23/255, blue: 42/255, opacity: 0.055))
+                    .fill(dark ? OB.studioSurfaceHover : OB.surfaceHover)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .strokeBorder(dark ? Color.white.opacity(0.14) : Color(red: 15/255, green: 23/255, blue: 42/255, opacity: 0.10), lineWidth: 0.5)
+                    .strokeBorder(dark ? OB.studioBorder : OB.hairline, lineWidth: 0.5)
             )
     }
 }
@@ -175,11 +231,11 @@ public struct OBButton: View {
     private var backgroundColor: Color {
         switch style {
         case .primary: return OB.accent
-        case .secondary: return Color(red: 15/255, green: 23/255, blue: 42/255, opacity: 0.06)
+        case .secondary: return OB.btnFill
         case .ghost: return .clear
         case .danger: return OB.redSoft
         case .darkGhost: return .clear
-        case .darkSecondary: return Color.white.opacity(0.10)
+        case .darkSecondary: return OB.studioSurfaceHover
         }
     }
 
@@ -189,17 +245,17 @@ public struct OBButton: View {
         case .secondary: return OB.ink
         case .ghost: return OB.ink2
         case .danger: return OB.red
-        case .darkGhost: return .white.opacity(0.72)
-        case .darkSecondary: return .white
+        case .darkGhost: return OB.studioInk2
+        case .darkSecondary: return OB.studioInk
         }
     }
 }
 
 // MARK: - 图标
 
-/// 原型内联 SVG 的 SwiftUI 还原。尺寸由调用方指定。
+/// 采用 macOS 原生 SF Symbols 渲染系统级矢量图标，支持动态字重与尺寸。
 public struct OBIcon: View {
-public enum ID: String {
+    public enum ID: String {
         case search, gear, chevronLeft, chevronRight, chevronUp, chevronDown
         case clipboard, camera, eyedropper, text, qrcode, folder, layout
         case pin, power, copy, link, code, lines
@@ -210,274 +266,75 @@ public enum ID: String {
 
     public let icon: ID
     public var size: CGFloat = 15
-    public var weight: CGFloat = 1.9
+    public var weight: CGFloat = 1.6
 
-    public init(_ icon: ID, size: CGFloat = 15, weight: CGFloat = 1.9) {
+    public init(_ icon: ID, size: CGFloat = 15, weight: CGFloat = 1.6) {
         self.icon = icon
         self.size = size
         self.weight = weight
     }
 
-    public init(_ raw: String, size: CGFloat = 15, weight: CGFloat = 1.9) {
+    public init(_ raw: String, size: CGFloat = 15, weight: CGFloat = 1.6) {
         self.icon = ID(rawValue: raw) ?? .clipboard
         self.size = size
         self.weight = weight
     }
 
-    public var body: some View {
-        Canvas { context, canvasSize in
-            let rect = CGRect(origin: .zero, size: canvasSize)
-            let s = canvasSize.width / 24
-            var path = Path()
-            draw(&path, scale: s)
-            context.stroke(path, with: .color(.primary.opacity(0.9)),
-                           style: StrokeStyle(lineWidth: weight, lineCap: .round, lineJoin: .round))
-            context.fill(fillPath(s), with: .color(.primary.opacity(0.9)))
-        }
-        .frame(width: size, height: size)
-    }
-
-    /// 描边路径（24×24 网格，按 scale 缩放）。
-    private func draw(_ path: inout Path, scale: CGFloat) {
-        func pt(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: x * scale, y: y * scale) }
+    private var sfSymbolName: String {
         switch icon {
-        case .search:
-            path.addEllipse(in: CGRect(x: 4 * scale, y: 4 * scale, width: 14 * scale, height: 14 * scale))
-            path.move(to: pt(15.2, 15.2)); path.addLine(to: pt(20, 20))
-        case .gear:
-            path.addEllipse(in: CGRect(x: 9 * scale, y: 9 * scale, width: 6 * scale, height: 6 * scale))
-            // 简化齿轮外圈：8 根辐条
-            for i in 0..<8 {
-                let angle = Double(i) * .pi / 4
-                let cx = 12 * scale, cy = 12 * scale
-                let r1 = 5.5 * scale, r2 = 8.2 * scale
-                path.move(to: CGPoint(x: cx + CGFloat(cos(angle)) * r1, y: cy + CGFloat(sin(angle)) * r1))
-                path.addLine(to: CGPoint(x: cx + CGFloat(cos(angle)) * r2, y: cy + CGFloat(sin(angle)) * r2))
-            }
-            path.addEllipse(in: CGRect(x: 4 * scale, y: 4 * scale, width: 16 * scale, height: 16 * scale))
-        case .chevronLeft:
-            path.move(to: pt(15, 18)); path.addLine(to: pt(9, 12)); path.addLine(to: pt(15, 6))
-        case .chevronRight:
-            path.move(to: pt(9, 18)); path.addLine(to: pt(15, 12)); path.addLine(to: pt(9, 6))
-        case .chevronUp:
-            path.move(to: pt(6, 15)); path.addLine(to: pt(12, 9)); path.addLine(to: pt(18, 15))
-        case .chevronDown:
-            path.move(to: pt(6, 9)); path.addLine(to: pt(12, 15)); path.addLine(to: pt(18, 9))
-        case .clipboard:
-            path.addRoundedRect(in: CGRect(x: 6 * scale, y: 4 * scale, width: 12 * scale, height: 17 * scale),
-                                cornerSize: CGSize(width: 3 * scale, height: 3 * scale))
-            path.move(to: pt(9, 4))
-            path.addCurve(to: pt(15, 4),
-                          control1: pt(9, 2), control2: pt(15, 2))
-            path.move(to: pt(9, 11)); path.addLine(to: pt(15, 11))
-            path.move(to: pt(9, 15)); path.addLine(to: pt(13, 15))
-        case .camera:
-            path.move(to: pt(4, 8)); path.addLine(to: pt(7, 8)); path.addLine(to: pt(9, 5))
-            path.addLine(to: pt(15, 5)); path.addLine(to: pt(17, 8)); path.addLine(to: pt(20, 8))
-            path.addLine(to: pt(20, 19)); path.addLine(to: pt(4, 19)); path.closeSubpath()
-            path.addEllipse(in: CGRect(x: 8.8 * scale, y: 9.8 * scale, width: 6.4 * scale, height: 6.4 * scale))
-        case .eyedropper:
-            path.move(to: pt(9, 11)); path.addLine(to: pt(16, 4))
-            path.addCurve(to: pt(20, 8), control1: pt(17.5, 3.5), control2: pt(21, 7))
-            path.addLine(to: pt(13, 15))
-            path.move(to: pt(9, 11)); path.addLine(to: pt(4, 12)); path.addLine(to: pt(5, 16))
-            path.addLine(to: pt(8, 19)); path.addLine(to: pt(12, 20)); path.addLine(to: pt(13, 15))
-            path.move(to: pt(3, 21)); path.addLine(to: pt(6, 20))
-        case .text:
-            path.move(to: pt(5, 6)); path.addLine(to: pt(5, 4)); path.addLine(to: pt(19, 4))
-            path.addLine(to: pt(19, 6))
-            path.move(to: pt(12, 4)); path.addLine(to: pt(12, 20))
-            path.move(to: pt(9, 20)); path.addLine(to: pt(15, 20))
-        case .qrcode:
-            path.addRoundedRect(in: CGRect(x: 4 * scale, y: 4 * scale, width: 6 * scale, height: 6 * scale),
-                                 cornerSize: CGSize(width: scale, height: scale))
-            path.addRoundedRect(in: CGRect(x: 14 * scale, y: 4 * scale, width: 6 * scale, height: 6 * scale),
-                                 cornerSize: CGSize(width: scale, height: scale))
-            path.addRoundedRect(in: CGRect(x: 4 * scale, y: 14 * scale, width: 6 * scale, height: 6 * scale),
-                                 cornerSize: CGSize(width: scale, height: scale))
-            path.move(to: pt(14, 14)); path.addLine(to: pt(17, 14)); path.addLine(to: pt(17, 17))
-            path.addLine(to: pt(14, 17)); path.closeSubpath()
-            path.move(to: pt(20, 14)); path.addLine(to: pt(21, 14))
-            path.move(to: pt(14, 20)); path.addLine(to: pt(15, 20))
-            path.move(to: pt(18, 18)); path.addLine(to: pt(21, 18)); path.addLine(to: pt(21, 21))
-            path.addLine(to: pt(18, 21)); path.closeSubpath()
-        case .folder:
-            path.move(to: pt(4, 7)); path.addLine(to: pt(10, 7)); path.addLine(to: pt(12, 9))
-            path.addLine(to: pt(20, 9)); path.addLine(to: pt(20, 19)); path.addLine(to: pt(4, 19))
-            path.closeSubpath()
-            path.move(to: pt(12, 12)); path.addLine(to: pt(12, 17))
-            path.move(to: pt(9.5, 14.5)); path.addLine(to: pt(14.5, 14.5))
-        case .layout:
-            path.addRoundedRect(in: CGRect(x: 4 * scale, y: 5 * scale, width: 7 * scale, height: 14 * scale),
-                                 cornerSize: CGSize(width: 1.5 * scale, height: 1.5 * scale))
-            path.addRoundedRect(in: CGRect(x: 14 * scale, y: 5 * scale, width: 6 * scale, height: 7 * scale),
-                                 cornerSize: CGSize(width: 1.5 * scale, height: 1.5 * scale))
-            path.addRoundedRect(in: CGRect(x: 14 * scale, y: 15 * scale, width: 6 * scale, height: 4 * scale),
-                                 cornerSize: CGSize(width: 1.5 * scale, height: 1.5 * scale))
-        case .pin:
-            path.move(to: pt(12, 17)); path.addLine(to: pt(12, 22))
-            path.move(to: pt(9, 4)); path.addLine(to: pt(15, 4)); path.addLine(to: pt(14, 9))
-            path.addLine(to: pt(17, 12)); path.addLine(to: pt(17, 14)); path.addLine(to: pt(7, 14))
-            path.addLine(to: pt(7, 12)); path.addLine(to: pt(10, 9)); path.closeSubpath()
-        case .power:
-            path.move(to: pt(12, 3)); path.addLine(to: pt(12, 11))
-            path.move(to: pt(18.4, 6.6))
-            path.addCurve(to: pt(5.6, 6.6), control1: pt(16, 3.6), control2: pt(8, 3.6))
-            path.addCurve(to: pt(18.4, 6.6), control1: pt(8, 18), control2: pt(16, 18))
-        case .copy:
-            path.addRoundedRect(in: CGRect(x: 9 * scale, y: 9 * scale, width: 11 * scale, height: 11 * scale),
-                                 cornerSize: CGSize(width: 2 * scale, height: 2 * scale))
-            path.move(to: pt(5, 15)); path.addLine(to: pt(5, 6))
-            path.addCurve(to: pt(7, 4), control1: pt(5, 4.9), control2: pt(5.9, 4))
-            path.addLine(to: pt(16, 4))
-        case .link:
-            path.move(to: pt(10, 13))
-            path.addCurve(to: pt(17.5, 13.5), control1: pt(12.8, 15.2), control2: pt(15.5, 15.5))
-            path.addLine(to: pt(20.5, 10.5))
-            path.addCurve(to: pt(13.5, 3.5), control1: pt(22.5, 6.5), control2: pt(18, 2))
-            path.addLine(to: pt(11.8, 5.2))
-            path.move(to: pt(14, 11))
-            path.addCurve(to: pt(6.5, 10.5), control1: pt(11.2, 8.8), control2: pt(8.5, 8.5))
-            path.addLine(to: pt(3.5, 13.5))
-            path.addCurve(to: pt(10.5, 20.5), control1: pt(1.5, 17.5), control2: pt(6, 22))
-            path.addLine(to: pt(12.2, 18.8))
-        case .code:
-            path.move(to: pt(8, 9)); path.addLine(to: pt(4, 12)); path.addLine(to: pt(8, 15))
-            path.move(to: pt(16, 9)); path.addLine(to: pt(20, 12)); path.addLine(to: pt(16, 15))
-            path.move(to: pt(13, 7)); path.addLine(to: pt(11, 17))
-        case .lines:
-            path.move(to: pt(6, 7)); path.addLine(to: pt(18, 7))
-            path.move(to: pt(6, 12)); path.addLine(to: pt(18, 12))
-            path.move(to: pt(6, 17)); path.addLine(to: pt(13, 17))
-        case .undo:
-            path.move(to: pt(9, 14)); path.addLine(to: pt(4, 9)); path.addLine(to: pt(9, 4))
-            path.move(to: pt(4, 9)); path.addLine(to: pt(14, 9))
-            path.addCurve(to: pt(14, 21), control1: pt(20, 9), control2: pt(20, 21))
-            path.addLine(to: pt(12, 21))
-        case .redo:
-            path.move(to: pt(15, 14)); path.addLine(to: pt(20, 9)); path.addLine(to: pt(15, 4))
-            path.move(to: pt(20, 9)); path.addLine(to: pt(10, 9))
-            path.addCurve(to: pt(10, 21), control1: pt(4, 9), control2: pt(4, 21))
-            path.addLine(to: pt(12, 21))
-        case .plus:
-            path.move(to: pt(5, 12)); path.addLine(to: pt(19, 12))
-            path.move(to: pt(12, 5)); path.addLine(to: pt(12, 19))
-        case .minus:
-            path.move(to: pt(5, 12)); path.addLine(to: pt(19, 12))
-        case .check:
-            path.move(to: pt(5, 13)); path.addLine(to: pt(9, 17)); path.addLine(to: pt(19, 7))
-        case .warning:
-            path.move(to: pt(12, 9)); path.addLine(to: pt(12, 13))
-            path.move(to: pt(12, 17)); path.addLine(to: pt(12, 17.01))
-            path.move(to: pt(10.3, 3.9)); path.addLine(to: pt(2.6, 17))
-            path.addCurve(to: pt(4.3, 20), control1: pt(2, 18.1), control2: pt(3, 20))
-            path.addLine(to: pt(19.7, 20))
-            path.addCurve(to: pt(21.4, 17), control1: pt(21, 20), control2: pt(22, 18.1))
-            path.addLine(to: pt(13.7, 3.9))
-            path.addCurve(to: pt(10.3, 3.9), control1: pt(12.6, 2.7), control2: pt(11.4, 2.7))
-        case .keyboard:
-            path.addRoundedRect(in: CGRect(x: 3 * scale, y: 6 * scale, width: 18 * scale, height: 12 * scale),
-                                 cornerSize: CGSize(width: 3 * scale, height: 3 * scale))
-            path.move(to: pt(7, 10)); path.addLine(to: pt(7.1, 10))
-            path.move(to: pt(11, 10)); path.addLine(to: pt(11.1, 10))
-            path.move(to: pt(15, 10)); path.addLine(to: pt(15.1, 10))
-            path.move(to: pt(17, 14)); path.addLine(to: pt(7, 14))
-        case .grid:
-            path.addRoundedRect(in: CGRect(x: 4 * scale, y: 4 * scale, width: 7 * scale, height: 7 * scale),
-                                 cornerSize: CGSize(width: 1.5 * scale, height: 1.5 * scale))
-            path.addRoundedRect(in: CGRect(x: 13 * scale, y: 4 * scale, width: 7 * scale, height: 7 * scale),
-                                 cornerSize: CGSize(width: 1.5 * scale, height: 1.5 * scale))
-            path.addRoundedRect(in: CGRect(x: 4 * scale, y: 13 * scale, width: 7 * scale, height: 7 * scale),
-                                 cornerSize: CGSize(width: 1.5 * scale, height: 1.5 * scale))
-            path.addRoundedRect(in: CGRect(x: 13 * scale, y: 13 * scale, width: 7 * scale, height: 7 * scale),
-                                 cornerSize: CGSize(width: 1.5 * scale, height: 1.5 * scale))
-        case .sun:
-            path.addEllipse(in: CGRect(x: 9 * scale, y: 9 * scale, width: 6 * scale, height: 6 * scale))
-            path.move(to: pt(12, 2)); path.addLine(to: pt(12, 5))
-            path.move(to: pt(12, 19)); path.addLine(to: pt(12, 22))
-            path.move(to: pt(4.9, 4.9)); path.addLine(to: pt(7, 7))
-            path.move(to: pt(17, 17)); path.addLine(to: pt(19.1, 19.1))
-            path.move(to: pt(2, 12)); path.addLine(to: pt(5, 12))
-            path.move(to: pt(19, 12)); path.addLine(to: pt(22, 12))
-            path.move(to: pt(4.9, 19.1)); path.addLine(to: pt(7, 17))
-            path.move(to: pt(17, 7)); path.addLine(to: pt(19.1, 4.9))
-        case .storage:
-            path.addEllipse(in: CGRect(x: 5 * scale, y: 2 * scale, width: 14 * scale, height: 6 * scale))
-            path.move(to: pt(5, 5)); path.addLine(to: pt(5, 12))
-            path.addCurve(to: pt(12, 15), control1: pt(5, 13.7), control2: pt(8.1, 15))
-            path.addCurve(to: pt(19, 12), control1: pt(15.9, 15), control2: pt(19, 13.7))
-            path.addLine(to: pt(19, 5))
-            path.move(to: pt(5, 12)); path.addLine(to: pt(5, 19))
-            path.addCurve(to: pt(12, 22), control1: pt(5, 20.7), control2: pt(8.1, 22))
-            path.addCurve(to: pt(19, 19), control1: pt(15.9, 22), control2: pt(19, 20.7))
-            path.addLine(to: pt(19, 12))
-        case .trash:
-            path.move(to: pt(4, 7)); path.addLine(to: pt(20, 7))
-            path.move(to: pt(9, 7)); path.addLine(to: pt(9, 4.5))
-            path.addLine(to: pt(15, 4.5)); path.addLine(to: pt(15, 7))
-            path.addRoundedRect(in: CGRect(x: 6 * scale, y: 7 * scale, width: 12 * scale, height: 13 * scale),
-                                  cornerSize: CGSize(width: scale, height: scale))
-            path.move(to: pt(10, 11)); path.addLine(to: pt(10, 16))
-            path.move(to: pt(14, 11)); path.addLine(to: pt(14, 16))
-        case .save:
-            path.move(to: pt(19, 21)); path.addLine(to: pt(5, 21))
-            path.addCurve(to: pt(3, 19), control1: pt(3, 21), control2: pt(3, 20.1))
-            path.addLine(to: pt(3, 5))
-            path.addCurve(to: pt(5, 3), control1: pt(3, 3.9), control2: pt(3.9, 3))
-            path.addLine(to: pt(16, 3)); path.addLine(to: pt(21, 8))
-            path.addLine(to: pt(21, 19))
-            path.addCurve(to: pt(19, 21), control1: pt(21, 20.1), control2: pt(20.1, 21))
-            path.move(to: pt(7, 3)); path.addLine(to: pt(7, 9))
-            path.addLine(to: pt(16, 9))
-            path.move(to: pt(7, 21)); path.addLine(to: pt(7, 14))
-            path.addLine(to: pt(17, 14)); path.addLine(to: pt(17, 21))
-        case .share:
-            path.move(to: pt(12, 15)); path.addLine(to: pt(12, 3))
-            path.move(to: pt(8, 7)); path.addLine(to: pt(12, 3)); path.addLine(to: pt(16, 7))
-            path.move(to: pt(4, 14)); path.addLine(to: pt(4, 20))
-            path.addCurve(to: pt(6, 22), control1: pt(4, 21.1), control2: pt(4.9, 22))
-            path.addLine(to: pt(18, 22))
-            path.addCurve(to: pt(20, 20), control1: pt(19.1, 22), control2: pt(20, 21.1))
-            path.addLine(to: pt(20, 14))
-        case .mosaic:
-            path.addRoundedRect(in: CGRect(x: 4 * scale, y: 5 * scale, width: 16 * scale, height: 14 * scale),
-                                  cornerSize: CGSize(width: 2 * scale, height: 2 * scale))
-            path.move(to: pt(4, 10)); path.addLine(to: pt(20, 10))
-            path.move(to: pt(4, 15)); path.addLine(to: pt(20, 15))
-            path.move(to: pt(9, 5)); path.addLine(to: pt(9, 19))
-            path.move(to: pt(15, 5)); path.addLine(to: pt(15, 19))
-        case .arrowUpRight:
-            path.move(to: pt(5, 19)); path.addLine(to: pt(19, 5))
-            path.move(to: pt(12, 5)); path.addLine(to: pt(19, 5)); path.addLine(to: pt(19, 12))
-        case .rect:
-            path.addRoundedRect(in: CGRect(x: 5 * scale, y: 6 * scale, width: 14 * scale, height: 12 * scale),
-                                  cornerSize: CGSize(width: 1.5 * scale, height: 1.5 * scale))
-        case .typeT:
-            path.move(to: pt(5, 6)); path.addLine(to: pt(5, 4)); path.addLine(to: pt(19, 4))
-            path.addLine(to: pt(19, 6))
-            path.move(to: pt(12, 4)); path.addLine(to: pt(12, 20))
-            path.move(to: pt(9, 20)); path.addLine(to: pt(15, 20))
-        case .close:
-            path.move(to: pt(6, 6)); path.addLine(to: pt(18, 18))
-            path.move(to: pt(18, 6)); path.addLine(to: pt(6, 18))
-        case .refresh:
-            path.move(to: pt(12, 4))
-            path.addCurve(to: pt(20, 12), control1: pt(16.4, 4), control2: pt(20, 7.6))
-            path.addCurve(to: pt(12, 20), control1: pt(20, 16.4), control2: pt(16.4, 20))
-            path.addCurve(to: pt(4, 12), control1: pt(7.6, 20), control2: pt(4, 16.4))
-            path.addCurve(to: pt(9, 5.8), control1: pt(4, 8.5), control2: pt(6, 6.2))
-            path.move(to: pt(9, 5.8)); path.addLine(to: pt(9, 3)); path.addLine(to: pt(6, 5))
-        case .image:
-            path.addRoundedRect(in: CGRect(x: 4 * scale, y: 5 * scale, width: 16 * scale, height: 14 * scale),
-                                 cornerSize: CGSize(width: 2 * scale, height: 2 * scale))
-            path.addEllipse(in: CGRect(x: 8 * scale, y: 9 * scale, width: 2.6 * scale, height: 2.6 * scale))
-            path.move(to: pt(6, 17)); path.addLine(to: pt(11, 12)); path.addLine(to: pt(14, 15))
-            path.addLine(to: pt(16.5, 12.5)); path.addLine(to: pt(19, 15))
+        case .search: return "magnifyingglass"
+        case .gear: return "gearshape"
+        case .chevronLeft: return "chevron.left"
+        case .chevronRight: return "chevron.right"
+        case .chevronUp: return "chevron.up"
+        case .chevronDown: return "chevron.down"
+        case .clipboard: return "doc.on.clipboard"
+        case .camera: return "camera"
+        case .eyedropper: return "eyedropper.halffull"
+        case .text: return "text.alignleft"
+        case .qrcode: return "qrcode"
+        case .folder: return "folder"
+        case .layout: return "rectangle.split.2x1"
+        case .pin: return "pin"
+        case .power: return "power"
+        case .copy: return "doc.on.doc"
+        case .link: return "link"
+        case .code: return "chevron.left.forwardslash.chevron.right"
+        case .lines: return "line.3.horizontal"
+        case .undo: return "arrow.uturn.backward"
+        case .redo: return "arrow.uturn.forward"
+        case .plus: return "plus"
+        case .minus: return "minus"
+        case .check: return "checkmark"
+        case .warning: return "exclamationmark.triangle"
+        case .keyboard: return "keyboard"
+        case .grid: return "square.grid.2x2"
+        case .sun: return "sun.max"
+        case .storage: return "internaldrive"
+        case .trash: return "trash"
+        case .save: return "square.and.arrow.down"
+        case .share: return "square.and.arrow.up"
+        case .mosaic: return "checkerboard.rectangle"
+        case .arrowUpRight: return "arrow.up.right"
+        case .rect: return "rectangle"
+        case .typeT: return "textformat"
+        case .close: return "xmark"
+        case .refresh: return "arrow.triangle.2.circlepath"
+        case .image: return "photo"
         }
     }
 
-    /// 需要填充的路径（power 图标圆弧不适合，全部走描边；保留接口备用）。
-    private func fillPath(_ scale: CGFloat) -> Path { Path() }
+    private var symbolWeight: Font.Weight {
+        if weight >= 2.0 { return .bold }
+        if weight >= 1.5 { return .medium }
+        return .regular
+    }
+
+    public var body: some View {
+        Image(systemName: sfSymbolName)
+            .font(.system(size: size, weight: symbolWeight))
+            .frame(width: size, height: size, alignment: .center)
+    }
 }
 
 // MARK: - 状态点
@@ -490,7 +347,7 @@ public struct StatusDot: View {
     public var standby = false
     public var body: some View {
         Circle()
-            .fill(standby ? OB.accent.opacity(0.75) : Color(hex: 0x22B45D))
+            .fill(standby ? OB.brandYellow : OB.green)
             .frame(width: 6, height: 6)
     }
 }
@@ -511,7 +368,7 @@ public struct OBToggle: View {
         Button(action: action) {
             ZStack {
                 Capsule()
-                    .fill(isOn ? Color(hex: 0x34C759) : Color(red: 15/255, green: 23/255, blue: 42/255, opacity: 0.16))
+                    .fill(isOn ? OB.green : OB.borderStrong)
                 Circle()
                     .fill(Color.white)
                     .shadow(color: .black.opacity(0.22), radius: 1.5, x: 0, y: 1)
@@ -553,8 +410,7 @@ public struct OBSegmentedControl<Option: Hashable>: View {
                         .background(
                             RoundedRectangle(cornerRadius: 6, style: .continuous)
                                 .fill(selection == option ? Color.white : Color.clear)
-                                .shadow(color: Color(red: 15/255, green: 23/255, blue: 42/255, opacity: 0.10),
-                                        radius: 1, x: 0, y: 1)
+                                .shadow(color: OB.hairline, radius: 1, x: 0, y: 1)
                         )
                 }
                 .buttonStyle(.plain)
@@ -563,7 +419,7 @@ public struct OBSegmentedControl<Option: Hashable>: View {
         .padding(2)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color(red: 15/255, green: 23/255, blue: 42/255, opacity: 0.06))
+                .fill(OB.surfaceHover)
         )
     }
 }
@@ -581,7 +437,7 @@ public struct ToastView: View {
     public var body: some View {
         HStack(spacing: 7) {
             OBIcon(.check, size: 14, weight: 2.2)
-                .foregroundColor(Color(hex: 0x34C759))
+                .foregroundColor(OB.green)
             Text(text)
                 .font(.system(size: 12.5, weight: .medium))
                 .foregroundColor(.white)
@@ -589,10 +445,10 @@ public struct ToastView: View {
         .padding(.horizontal, 13)
         .frame(height: 34)
         .background(
-            Capsule().fill(Color(red: 20/255, green: 22/255, blue: 28/255, opacity: 0.88))
+            Capsule().fill(OB.studioBar.opacity(0.94))
         )
         .overlay(
-            Capsule().strokeBorder(Color.white.opacity(0.14), lineWidth: 0.5)
+            Capsule().strokeBorder(OB.studioBorder, lineWidth: 0.5)
         )
         .shadow(color: .black.opacity(0.24), radius: 14, x: 0, y: 10)
         .transition(.opacity.combined(with: .move(edge: .bottom)))

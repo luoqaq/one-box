@@ -104,7 +104,7 @@ public struct ScreenshotsWorkbenchView: View {
                         EmptyBoxView(
                             icon: .camera,
                             title: "还没有截图记录",
-                            message: "点击「开始区域截图」或按全局快捷键，框选后即可标注、复制或保存。"
+                            message: "点击「开始区域截图」或按全局快捷键，框选后可直接标注，对号复制到剪贴板。"
                         )
                         OBButton(title: "立即截图", style: .primary, action: onStartCapture)
                     }
@@ -199,7 +199,7 @@ public struct ScreenshotsWorkbenchView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("截图与标注 · 工具配置")
                             .font(.system(size: 16, weight: .semibold))
-                        Text("与截图流程相关的默认动作、保存路径、上限和权限都集中在这里")
+                        Text("与截图流程相关的快捷键、保存路径、上限和权限都集中在这里")
                             .font(.system(size: 12))
                             .foregroundColor(OB.ink3)
                     }
@@ -227,21 +227,15 @@ public struct ScreenshotsWorkbenchView: View {
                             model.registry.toggleEnabled("screenshots")
                         }
                     }
-                    SettingsRow(title: "区域截图快捷键", desc: "全局任意场景按下立即拉起全屏选区") {
-                        HotkeyButton(spec: model.settings.hotkeyCapture) { spec in
+                    SettingsRow(title: "区域截图快捷键", desc: "全局任意场景按下立即拉起全屏选区；框选后原地标注，对号复制") {
+                        HotkeyButton(spec: model.settings.hotkeyCapture, onRecord: { spec in
                             model.settings.setHotkey(spec, for: "capture")
                             model.showToast("快捷键已更新")
-                        }
-                    }
-                    SettingsRow(title: "框选完成后默认动作", desc: "完成框选并按下回车后的流向") {
-                        OBSegmentedControl(
-                            options: CaptureDefaultAction.allCases,
-                            title: { $0.title },
-                            selection: Binding(
-                                get: { model.settings.captureDefaultAction },
-                                set: { model.settings.captureDefaultAction = $0 }
-                            )
-                        )
+                            if !AccessibilityPermission.isTrusted {
+                                _ = AccessibilityPermission.promptIfNeeded()
+                                model.showToast("请在系统设置中允许辅助功能后快捷键才会生效")
+                            }
+                        }, onInvalid: { model.showToast($0) })
                     }
                 }
 
@@ -335,7 +329,7 @@ struct CaptureStage: View {
                         while x < size.width {
                             context.fill(
                                 Path(ellipseIn: CGRect(x: x - r, y: y - r, width: r * 2, height: r * 2)),
-                                with: .color(Color(red: 15/255, green: 23/255, blue: 42/255, opacity: 0.06))
+                                with: .color(OB.surfaceHover)
                             )
                             x += dot
                         }
@@ -355,7 +349,7 @@ struct CaptureStage: View {
                 }
             }
         }
-        .background(Color(hex: 0xF4F5F7))
+        .background(OB.previewBg)
         .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 11, style: .continuous)
@@ -398,6 +392,14 @@ struct CaptureRowView: View {
             RoundedRectangle(cornerRadius: 9, style: .continuous)
                 .fill(isSelected ? OB.accentSoft : (isHovering ? OB.surfaceSubtle : Color.clear))
         )
+        .overlay(alignment: .leading) {
+            if isSelected {
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(OB.brandYellow)
+                    .frame(width: 3, height: 22)
+                    .padding(.leading, 3)
+            }
+        }
         .contentShape(Rectangle())
         .onTapGesture { onSelect() }
         .onHover { isHovering = $0 }
@@ -422,7 +424,7 @@ struct CaptureThumbView: View {
         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .strokeBorder(Color(red: 15/255, green: 23/255, blue: 42/255, opacity: 0.10), lineWidth: 0.5)
+                .strokeBorder(OB.hairline, lineWidth: 0.5)
         )
         .task(id: record.id) {
             guard let path = record.thumbnailFile else { return }
