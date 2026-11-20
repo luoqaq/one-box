@@ -24,6 +24,7 @@ public final class AppModel: ObservableObject {
     @Published public var toast: String?
 
     private var toastTask: Task<Void, Never>?
+    private var cancellables: Set<AnyCancellable> = []
 
     public init(registry: ToolRegistry, settings: AppSettings) throws {
         self.registry = registry
@@ -33,6 +34,11 @@ public final class AppModel: ObservableObject {
         self.clipboardService = ClipboardHistoryService(store: clipboardStore)
         self.captureService = ScreenCaptureService()
         self.colorPickService = ColorPickService()
+        settings.objectWillChange
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+            .store(in: &cancellables)
         clipboardService.onRecordsChanged = { [weak self] in
             self?.reloadClipboardRecords()
         }
@@ -136,6 +142,25 @@ enum OBTimeFormat {
         df.locale = Locale(identifier: "zh_CN")
         df.dateFormat = "M月d日"
         return "\(df.string(from: date)) \(time)"
+    }
+
+    static func captureTitle(_ date: Date) -> String {
+        let calendar = Calendar.current
+        let now = Date()
+        let timeFormatter = DateFormatter()
+        timeFormatter.dateFormat = "HH:mm"
+        let time = timeFormatter.string(from: date)
+        if calendar.isDate(date, inSameDayAs: now) {
+            return "今日 \(time) 截图"
+        }
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: now),
+           calendar.isDate(date, inSameDayAs: yesterday) {
+            return "昨天 \(time) 截图"
+        }
+        let dateFormatter = DateFormatter()
+        dateFormatter.locale = Locale(identifier: "zh_CN")
+        dateFormatter.dateFormat = "M月d日"
+        return "\(dateFormatter.string(from: date)) \(time) 截图"
     }
 }
 

@@ -20,12 +20,26 @@ final class WindowRouter {
     private var launcherPanel: NSPanel?
     private var clipboardWindow: NSWindow?
     private var screenshotsWindow: NSWindow?
-    private var settingsWindow: NSWindow?
 
     var onToggleToolEnabled: (String) -> Void = { _ in }
 
     init(model: AppModel) {
         self.model = model
+    }
+
+    func applyAppearance(_ appearance: NSAppearance?) {
+        for window in [launcherPanel, clipboardWindow, screenshotsWindow].compactMap({ $0 }) {
+            window.appearance = appearance
+            window.contentView?.needsDisplay = true
+        }
+    }
+
+    private func currentAppearance() -> NSAppearance? {
+        switch model.settings.themeMode {
+        case .system: return nil
+        case .light: return NSAppearance(named: .aqua)
+        case .dark: return NSAppearance(named: .darkAqua)
+        }
     }
 
     // MARK: 工具箱面板
@@ -49,15 +63,22 @@ final class WindowRouter {
 
     private func showLauncher() {
         let panel = launcherPanel ?? makeLauncherPanel()
-        // 每次打开刷新 root，确保设置里改过的热键文案是最新的。
+        // 每次打开刷新 root，确保设置里改过的热键文案是最新的；也用于从设置同窗返回。
         panel.contentView = NSHostingView(rootView: makeLauncherView())
-        if let button = AppDelegate.statusItemButton {
-            let frame = button.window?.convertToScreen(button.bounds.offsetBy(dx: 0, dy: button.bounds.height)) ?? .zero
-            let x = frame.minX - 300 + frame.width / 2
-            panel.setFrameOrigin(NSPoint(x: max(8, min(x, NSScreen.main!.frame.maxX - 608)),
-                                         y: frame.minY + 8))
-        } else {
-            center(panel)
+        presentLauncherPanel(panel)
+    }
+
+    /// 将设置/百宝袋内容呈现在同一块 600×540 面板上，避免另开工作台窗造成尺寸跳变。
+    private func presentLauncherPanel(_ panel: NSPanel) {
+        if !panel.isVisible {
+            if let button = AppDelegate.statusItemButton {
+                let frame = button.window?.convertToScreen(button.bounds.offsetBy(dx: 0, dy: button.bounds.height)) ?? .zero
+                let x = frame.minX - 300 + frame.width / 2
+                panel.setFrameOrigin(NSPoint(x: max(8, min(x, NSScreen.main!.frame.maxX - 608)),
+                                             y: frame.minY + 8))
+            } else {
+                center(panel)
+            }
         }
         // 先激活再 orderFront：Dock reopen 时若反过来，hidesOnDeactivate 会在激活落稳前把面板藏掉。
         NSApp.activate(ignoringOtherApps: true)
@@ -86,6 +107,7 @@ final class WindowRouter {
         panel.standardWindowButton(.zoomButton)?.isHidden = true
         // 无标题栏：靠面板背景拖动；固定尺寸，不做缩放。
         panel.isMovableByWindowBackground = true
+        panel.appearance = currentAppearance()
         panel.contentView = NSHostingView(rootView: makeLauncherView())
         launcherPanel = panel
         return panel
@@ -117,7 +139,7 @@ final class WindowRouter {
                 self?.open(dest)
             },
             onOpenSettings: { [weak self] target in
-                self?.hideLauncher()
+                // 同窗覆盖：不 hide，直接把面板内容换成设置。
                 self?.showSettings(initialPanel: Self.settingsPanel(from: target))
             },
             onToggleEnabled: { [weak self] id in
@@ -225,17 +247,17 @@ final class WindowRouter {
         model.reloadCaptures()
     }
 
-    // MARK: 设置
+    // MARK: 设置（与百宝袋同面板，失焦关闭）
 
-    func showSettings(initialPanel: SettingsWindowView.Panel = .plugins) {
-        let window = settingsWindow ?? makeWorkbenchWindow()
-        window.contentView = NSHostingView(rootView:
-            SettingsWindowView(model: model, initialPanel: initialPanel, onClose: {
-                window.orderOut(nil)
+    func showSettings(initialPanel: SettingsWindowView.Panel = .general) {
+        let panel = launcherPanel ?? makeLauncherPanel()
+        panel.contentView = NSHostingView(rootView:
+            SettingsWindowView(model: model, initialPanel: initialPanel, onClose: { [weak self] in
+                // 返回百宝袋列表，面板保持打开；点窗外失焦则由 hidesOnDeactivate 整面板收起。
+                self?.showLauncher()
             })
         )
-        settingsWindow = window
-        show(window)
+        presentLauncherPanel(panel)
     }
 
     /// 从最近截图记录进入贴图标注。
@@ -410,6 +432,7 @@ final class WindowRouter {
         window.standardWindowButton(.miniaturizeButton)?.isHidden = true
         window.standardWindowButton(.zoomButton)?.isHidden = true
         window.isMovableByWindowBackground = true
+        window.appearance = currentAppearance()
         window.center()
         return window
     }

@@ -9,6 +9,22 @@ public typealias ModifierKey = HotKeys.ModifierKey
 public typealias ModifierKind = HotKeys.ModifierKind
 public typealias ModifierSide = HotKeys.ModifierSide
 
+// MARK: - 外观主题
+
+public enum AppThemeMode: String, Codable, CaseIterable, Sendable {
+    case system
+    case light
+    case dark
+
+    public var title: String {
+        switch self {
+        case .system: return "自动"
+        case .light: return "浅色"
+        case .dark: return "深色"
+        }
+    }
+}
+
 // MARK: - 截图默认动作
 
 public enum CaptureDefaultAction: String, Codable, CaseIterable, Sendable {
@@ -35,8 +51,10 @@ public final class AppSettings: ObservableObject {
     private let prefix = "onebox.settings"
 
     @Published public var launchAtLogin: Bool { didSet { defaults.set(launchAtLogin, forKey: prefix + ".launchAtLogin") } }
+    @Published public var showInDock: Bool { didSet { defaults.set(showInDock, forKey: prefix + ".showInDock") } }
     @Published public var defaultOpenLauncher: Bool { didSet { defaults.set(defaultOpenLauncher, forKey: prefix + ".defaultOpenLauncher") } }
     @Published public var showInactiveTools: Bool { didSet { defaults.set(showInactiveTools, forKey: prefix + ".showInactiveTools") } }
+    @Published public var themeMode: AppThemeMode { didSet { defaults.set(themeMode.rawValue, forKey: prefix + ".themeMode") } }
 
     @Published public var hotkeyLauncher: HotKeySpec { didSet { defaults.set(encode(hotkeyLauncher), forKey: prefix + ".hotkey.launcher") } }
     @Published public var hotkeyClipboard: HotKeySpec { didSet { defaults.set(encode(hotkeyClipboard), forKey: prefix + ".hotkey.clipboard") } }
@@ -54,8 +72,10 @@ public final class AppSettings: ObservableObject {
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         launchAtLogin = defaults.bool(forKey: prefix + ".launchAtLogin")
+        showInDock = defaults.object(forKey: prefix + ".showInDock") as? Bool ?? false
         defaultOpenLauncher = defaults.object(forKey: prefix + ".defaultOpenLauncher") as? Bool ?? true
         showInactiveTools = defaults.object(forKey: prefix + ".showInactiveTools") as? Bool ?? true
+        themeMode = AppThemeMode(rawValue: defaults.string(forKey: prefix + ".themeMode") ?? "") ?? .system
         hotkeyLauncher = Self.decode(defaults.data(forKey: prefix + ".hotkey.launcher")) ?? .launcherDefault
         hotkeyClipboard = Self.decode(defaults.data(forKey: prefix + ".hotkey.clipboard")) ?? .clipboardDefault
         hotkeyCapture = Self.decode(defaults.data(forKey: prefix + ".hotkey.capture")) ?? .captureDefault

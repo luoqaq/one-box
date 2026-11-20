@@ -57,6 +57,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         syncHotkeys()
 
         setupStatusItem()
+        applyDockVisibility()
+        applyThemeMode(model.settings.themeMode)
 
         // 偏好 / 工具启用变化时重注册热键。
         model.settings.$hotkeyLauncher.dropFirst().sink { [weak self] _ in self?.syncHotkeys() }.store(in: &cancellables)
@@ -64,9 +66,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.settings.$hotkeyCapture.dropFirst().sink { [weak self] _ in self?.syncHotkeys() }.store(in: &cancellables)
         model.settings.$hotkeyColorPicker.dropFirst().sink { [weak self] _ in self?.syncHotkeys() }.store(in: &cancellables)
         model.registry.$states.dropFirst().sink { [weak self] _ in self?.syncHotkeys() }.store(in: &cancellables)
+        model.settings.$showInDock.dropFirst().sink { [weak self] _ in
+            self?.applyDockVisibility()
+        }.store(in: &cancellables)
+        model.settings.$themeMode.dropFirst().sink { [weak self] mode in
+            self?.applyThemeMode(mode)
+        }.store(in: &cancellables)
 
         model.reloadClipboardRecords()
         model.reloadCaptures()
+    }
+
+    /// 按偏好切换 Dock 可见性：`.regular` 显示，`.accessory` 隐藏（菜单栏 Agent 形态）。
+    private func applyDockVisibility() {
+        let policy: NSApplication.ActivationPolicy = model.settings.showInDock ? .regular : .accessory
+        _ = NSApp.setActivationPolicy(policy)
+    }
+
+    /// 同步全局与已创建窗口的外观模式。
+    private func applyThemeMode(_ mode: AppThemeMode) {
+        let appearance: NSAppearance?
+        switch mode {
+        case .system: appearance = nil
+        case .light: appearance = NSAppearance(named: .aqua)
+        case .dark: appearance = NSAppearance(named: .darkAqua)
+        }
+        NSApp.appearance = appearance
+        router.applyAppearance(appearance)
     }
 
     // MARK: 菜单栏

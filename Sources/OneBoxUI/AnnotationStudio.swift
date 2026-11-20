@@ -605,16 +605,43 @@ public struct AnnotationStudioView: View {
     }
 }
 
-// MARK: - 窗口红绿灯（装饰）
+// MARK: - 窗口红绿灯（接近系统 12pt；传入 onClose 时可点，否则仅装饰）
 
 struct TrafficDots: View {
+    var onClose: (() -> Void)? = nil
+    /// 视觉直径；系统红绿灯约 12pt。
+    var diameter: CGFloat = 12
+
+    private var isInteractive: Bool { onClose != nil }
+
     var body: some View {
-        HStack(spacing: 6) {
-            Circle().fill(Color(hex: 0xFF5F57)).frame(width: 8, height: 8)
-            Circle().fill(Color(hex: 0xFEBC2E)).frame(width: 8, height: 8)
-            Circle().fill(Color(hex: 0x28C840)).frame(width: 8, height: 8)
+        HStack(spacing: 8) {
+            trafficDot(color: Color(hex: 0xFF5F57), help: "关闭", action: onClose)
+            trafficDot(color: Color(hex: 0xFEBC2E), help: "最小化") {
+                NSApp.keyWindow?.miniaturize(nil)
+            }
+            trafficDot(color: Color(hex: 0x28C840), help: "缩放") {
+                NSApp.keyWindow?.zoom(nil)
+            }
         }
-        .allowsHitTesting(false) // 装饰用，不挡窗口拖动
+        .allowsHitTesting(isInteractive)
+    }
+
+    @ViewBuilder
+    private func trafficDot(color: Color, help: String, action: (() -> Void)?) -> some View {
+        let dot = Circle()
+            .fill(color)
+            .frame(width: diameter, height: diameter)
+            .frame(width: 20, height: 20)
+            .contentShape(Circle())
+
+        if isInteractive, let action {
+            Button(action: action) { dot }
+                .buttonStyle(.plain)
+                .help(help)
+        } else {
+            dot
+        }
     }
 }
 

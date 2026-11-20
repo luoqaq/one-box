@@ -2,15 +2,15 @@ import SwiftUI
 import ToolLauncherUI
 import ToolRegistry
 
-// MARK: - 全局设置窗口（原型 view-settings：204pt 侧栏 + 主区）
+// MARK: - 全局设置（与百宝袋同窗 600×540 覆盖；无红绿灯，失焦关闭）
 
 public struct SettingsWindowView: View {
     @ObservedObject var model: AppModel
     let onClose: () -> Void
 
     public enum Panel: String, CaseIterable, Identifiable {
-        case plugins
         case general
+        case plugins
         case hotkeys
         case storage
 
@@ -18,17 +18,17 @@ public struct SettingsWindowView: View {
 
         var title: String {
             switch self {
-            case .plugins: return "工具插件"
-            case .general: return "通用"
-            case .hotkeys: return "全局快捷键"
-            case .storage: return "权限与存储"
+            case .general: return "通用与外观"
+            case .plugins: return "工具管理"
+            case .hotkeys: return "快捷键"
+            case .storage: return "权限与数据"
             }
         }
 
         var icon: OBIcon.ID {
             switch self {
-            case .plugins: return .grid
             case .general: return .sun
+            case .plugins: return .grid
             case .hotkeys: return .keyboard
             case .storage: return .storage
             }
@@ -38,7 +38,7 @@ public struct SettingsWindowView: View {
     @State private var panel: Panel
     @State private var showResetConfirm = false
 
-    public init(model: AppModel, initialPanel: Panel = .plugins, onClose: @escaping () -> Void) {
+    public init(model: AppModel, initialPanel: Panel = .general, onClose: @escaping () -> Void) {
         self.model = model
         self.onClose = onClose
         _panel = State(initialValue: initialPanel)
@@ -49,11 +49,10 @@ public struct SettingsWindowView: View {
             sidebar
             main
         }
-        .frame(minWidth: 820, minHeight: 560)
+        .frame(width: 600, height: 540)
         .background(GlassPanelBackground())
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(toastOverlay)
-        .preferredColorScheme(.light)
         .tint(OB.accent)
         .overlay {
             if showResetConfirm {
@@ -72,67 +71,88 @@ public struct SettingsWindowView: View {
         }
     }
 
-    // MARK: 侧栏
+    // MARK: 侧栏（顶对齐导航 + 左下版本号）
 
     private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            ZStack {
-                WindowDragRegion()
-                HStack {
-                    TrafficDots()
-                    Spacer(minLength: 0).allowsHitTesting(false)
-                    Text("v0.1.0")
-                        .font(.system(size: 11).monospaced())
-                        .foregroundColor(OB.ink3)
-                        .allowsHitTesting(false)
-                }
-                .padding(.horizontal, 6)
-            }
-            .padding(.bottom, 16)
+        ZStack(alignment: .topLeading) {
+            WindowDragRegion()
+            VStack(alignment: .leading, spacing: 2) {
+                backToLauncherButton
+                    .padding(.bottom, 8)
 
-            ForEach(Panel.allCases) { p in
-                SidebarItemView(panel: p, isSelected: panel == p) {
-                    panel = p
+                ForEach(Panel.allCases) { p in
+                    SidebarItemView(panel: p, isSelected: panel == p) {
+                        panel = p
+                    }
                 }
+
+                Spacer(minLength: 0)
+                    .allowsHitTesting(false)
+
+                Text("v0.1.0")
+                    .font(.system(size: 11).monospaced())
+                    .foregroundColor(OB.ink3)
+                    .padding(.horizontal, 9)
+                    .padding(.top, 6)
+                    .allowsHitTesting(false)
             }
-            Spacer()
+            .padding(10)
         }
-        .padding(10)
-        .frame(width: 204, alignment: .top)
+        .frame(width: 168, alignment: .topLeading)
         .background(OB.sidebarBg)
         .overlay(alignment: .trailing) { Divider().overlay(OB.hairline) }
+    }
+
+    private var backToLauncherButton: some View {
+        Button(action: onClose) {
+            HStack(spacing: 6) {
+                OBIcon(.chevronLeft, size: 13, weight: 1.65)
+                Text("返回百宝袋")
+                    .font(.system(size: 12.5, weight: .medium))
+            }
+            .foregroundColor(OB.ink2)
+            .padding(.horizontal, 8)
+            .frame(height: 28)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("返回工具箱")
     }
 
     // MARK: 主区
 
     private var main: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                switch panel {
-                case .plugins: pluginPanel
-                case .general: generalPanel
-                case .hotkeys: hotkeyPanel
-                case .storage: storagePanel
-                }
+        VStack(spacing: 0) {
+            ZStack(alignment: .leading) {
+                WindowDragRegion()
+                Text(panel.title)
+                    .font(.system(size: 16, weight: .semibold))
+                    .padding(.horizontal, 18)
+                    .allowsHitTesting(false)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(EdgeInsets(top: 22, leading: 26, bottom: 26, trailing: 26))
+            .frame(height: 48)
+            .overlay(alignment: .bottom) { Divider().overlay(OB.hairline) }
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    switch panel {
+                    case .plugins: pluginPanel
+                    case .general: generalPanel
+                    case .hotkeys: hotkeyPanel
+                    case .storage: storagePanel
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(EdgeInsets(top: 14, leading: 18, bottom: 18, trailing: 18))
+            }
         }
         .background(OB.contentBg)
     }
 
-    private var heading: some View {
-        Text(panel.title)
-            .font(.system(size: 18, weight: .semibold))
-            .padding(.bottom, 14)
-    }
-
-    // 工具插件
+    // 工具管理
     private var pluginPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("工具插件（按需加载）")
-                .font(.system(size: 18, weight: .semibold))
-                .padding(.bottom, 2)
 
             SettingsCard {
                 ForEach(model.registry.builtinTools.filter(\.isInstalled)) { tool in
@@ -151,7 +171,7 @@ public struct SettingsWindowView: View {
             }
 
             SettingsCard {
-                SettingsRow(title: "在百宝袋展示未启用和规划中工具", desc: "关闭后百宝袋只列出当前已启用模块，桌面更极简") {
+                SettingsRow(title: "在百宝袋中显示未启用工具", desc: "关闭后百宝袋仅展示已启用的工具") {
                     OBToggle(isOn: model.settings.showInactiveTools) {
                         model.settings.showInactiveTools.toggle()
                         OBLauncherPreferences.showInactiveTools = model.settings.showInactiveTools
@@ -197,12 +217,17 @@ public struct SettingsWindowView: View {
         }
     }
 
-    /// 插件行：标题带运行时状态（· 后台监听中 · ~4 MB（按需缓存））；外侧常驻全局热键。
+    /// 工具管理行：名称旁显示状态徽标（● 监听中 / ● 已就绪 / 未启用），下方简明功能说明。
     private struct PluginSettingsRow: View {
         let tool: ToolDescriptor
         let isEnabled: Bool
         let hotkeyLabel: String?
         let onToggle: () -> Void
+
+        private var statusText: String {
+            guard isEnabled else { return "未启用" }
+            return tool.id == "clipboard" ? "● 监听中" : "● 已就绪"
+        }
 
         var body: some View {
             let fgColor = Color(flexibleHex: tool.fgHex)
@@ -222,42 +247,66 @@ public struct SettingsWindowView: View {
                     )
 
                 VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 7) {
+                    HStack(spacing: 8) {
                         Text(tool.name)
                             .font(.system(size: 13, weight: .medium))
-                        Text(isEnabled ? "· \(tool.runtimeLabel) · \(tool.memoryLabel)" : "· 未启用 · 0 MB")
-                            .font(.system(size: 11).monospaced())
+                            .lineLimit(1)
+                        Text(statusText)
+                            .font(.system(size: 11, weight: .medium))
                             .foregroundColor(isEnabled ? OB.green : OB.ink3)
+                            .lineLimit(1)
                     }
                     Text(tool.desc)
                         .font(.system(size: 11.5))
                         .foregroundColor(OB.ink3)
+                        .lineLimit(2)
+                        .truncationMode(.tail)
                 }
-                Spacer(minLength: 12)
-                if let hotkeyLabel, hotkeyLabel != "—", !hotkeyLabel.isEmpty {
-                    Kbd(text: hotkeyLabel)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(spacing: 8) {
+                    if let hotkeyLabel, hotkeyLabel != "—", !hotkeyLabel.isEmpty {
+                        Kbd(text: hotkeyLabel)
+                    }
+                    OBToggle(isOn: isEnabled, action: onToggle)
                 }
-                OBToggle(isOn: isEnabled, action: onToggle)
+                .fixedSize(horizontal: true, vertical: false)
+                .layoutPriority(1)
             }
-            .padding(.horizontal, 14)
+            .padding(.horizontal, 12)
             .padding(.vertical, 10)
             .frame(minHeight: 48, alignment: .center)
             .overlay(alignment: .bottom) { Divider().overlay(OB.hairline) }
         }
     }
 
-    // 通用
+    // 通用与外观
     private var generalPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
-            heading
             SettingsCard {
-                SettingsRow(title: "登录后启动", desc: "常驻菜单栏，不在 Dock 栏占用图标") {
+                SettingsRow(title: "外观主题", desc: "切换浅色、深色或跟随系统外观") {
+                    OBSegmentedControl(
+                        options: AppThemeMode.allCases,
+                        title: { $0.title },
+                        selection: Binding(
+                            get: { model.settings.themeMode },
+                            set: { model.settings.themeMode = $0 }
+                        )
+                    )
+                }
+            }
+            SettingsCard {
+                SettingsRow(title: "开机自动启动", desc: "登录 macOS 后自动在菜单栏后台待命") {
                     OBToggle(isOn: model.settings.launchAtLogin) {
                         model.settings.launchAtLogin.toggle()
                         LaunchAtLoginController.setEnabled(model.settings.launchAtLogin)
                     }
                 }
-                SettingsRow(title: "点击菜单栏默认打开", desc: "百宝袋聚合入口或直达单个高频工具") {
+                SettingsRow(title: "在程序坞 (Dock) 中显示", desc: "关闭后仅保留顶部菜单栏图标与快捷键唤起") {
+                    OBToggle(isOn: model.settings.showInDock) {
+                        model.settings.showInDock.toggle()
+                    }
+                }
+                SettingsRow(title: "点击菜单栏图标打开", desc: "左键单击菜单栏图标时的默认窗口") {
                     OBSegmentedControl(options: [true, false], title: { $0 ? "百宝袋" : "剪贴板历史" },
                                         selection: Binding(get: { model.settings.defaultOpenLauncher },
                                                            set: { model.settings.defaultOpenLauncher = $0 }))
@@ -269,13 +318,12 @@ public struct SettingsWindowView: View {
     // 全局快捷键
     private var hotkeyPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
-            heading
             SettingsCard {
-                SettingsRow(title: "辅助功能权限", desc: "全局快捷键（含双击修饰键、区分左右）依赖此项") {
+                SettingsRow(title: "辅助功能权限", desc: "全局快捷键依赖此项（含双击、左右键）") {
                     HStack(spacing: 8) {
                         PermBadge(AccessibilityPermission.isTrusted ? .ok("已允许") : .warn("未授权"))
                         if !AccessibilityPermission.isTrusted {
-                            OBButton(title: "打开系统设置", style: .secondary) {
+                            OBButton(title: "系统设置", style: .secondary) {
                                 _ = AccessibilityPermission.promptIfNeeded()
                                 AccessibilityPermission.openSystemSettings()
                             }
@@ -311,22 +359,28 @@ public struct SettingsWindowView: View {
         })
     }
 
-    // 权限与存储
+    // 权限与数据
     private var storagePanel: some View {
         VStack(alignment: .leading, spacing: 12) {
-            heading
             SettingsCard {
-                SettingsRow(title: "屏幕录制", desc: "用于截图、标注与屏幕取色") {
-                    PermBadge(model.captureService.authorizationStatus() ? .ok("已允许") : .warn("未授权"))
+                SettingsRow(title: "屏幕录制权限", desc: "用于区域截图、标注与屏幕取色") {
+                    HStack(spacing: 8) {
+                        PermBadge(model.captureService.authorizationStatus() ? .ok("已允许") : .warn("未授权"))
+                        if !model.captureService.authorizationStatus() {
+                            OBButton(title: "去授权", style: .secondary) {
+                                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+                                    NSWorkspace.shared.open(url)
+                                }
+                            }
+                        }
+                    }
                 }
-                SettingsRow(title: "剪贴板访问", desc: "系统隐私策略可能会提示确认") {
-                    PermBadge(.warn("待实机确认"))
-                }
-                SettingsRow(title: "辅助功能", desc: "全局快捷键监听需要；可点右侧打开系统设置") {
+                SettingsRow(title: "辅助功能权限", desc: "用于监听全局快捷键（含双击修饰键）") {
                     HStack(spacing: 8) {
                         PermBadge(AccessibilityPermission.isTrusted ? .ok("已允许") : .warn("未授权"))
                         if !AccessibilityPermission.isTrusted {
-                            OBButton(title: "打开系统设置", style: .secondary) {
+                            OBButton(title: "去授权", style: .secondary) {
+                                _ = AccessibilityPermission.promptIfNeeded()
                                 AccessibilityPermission.openSystemSettings()
                             }
                         }
@@ -334,8 +388,13 @@ public struct SettingsWindowView: View {
                 }
             }
             SettingsCard {
-                SettingsRow(title: "本地数据目录", desc: "所有工具数据均仅存在这台 Mac") {
-                    PathChip(path: NSHomeDirectory() + "/Library/Application Support/OneBox")
+                SettingsRow(title: "本地存储目录", desc: "数据仅保存在本机，不上传云端") {
+                    OBButton(title: "在访达中打开", style: .secondary) {
+                        let url = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                            .appendingPathComponent("OneBox", isDirectory: true)
+                        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+                        NSWorkspace.shared.open(url)
+                    }
                 }
                 StorageUsageRow(model: model)
                 SettingsRow(title: "重置全部本地数据", desc: "恢复首次安装状态") {
@@ -364,13 +423,15 @@ private struct StorageUsageRow: View {
     @State private var capCount = 0
 
     var body: some View {
-        HStack(alignment: .center, spacing: 16) {
+        HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("总占用空间")
                     .font(.system(size: 13, weight: .medium))
+                    .lineLimit(1)
                 Text("剪贴板 \(clipCount) 条 · 截图 \(capCount) 条")
                     .font(.system(size: 11.5))
                     .foregroundColor(OB.ink3)
+                    .lineLimit(1)
                 GeometryReader { geo in
                     ZStack(alignment: .leading) {
                         Capsule().fill(OB.surfaceActive)
@@ -378,15 +439,18 @@ private struct StorageUsageRow: View {
                             .frame(width: max(4, geo.size.width * usageFraction))
                     }
                 }
-                .frame(width: 240, height: 5)
+                .frame(maxWidth: 160, maxHeight: 5)
+                .frame(height: 5)
                 .padding(.top, 4)
             }
-            Spacer()
+            .frame(maxWidth: .infinity, alignment: .leading)
             Text(OBFormat.bytes(totalBytes))
                 .font(.system(size: 13, weight: .medium))
                 .monospacedDigit()
+                .fixedSize()
+                .layoutPriority(1)
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .frame(minHeight: 48, alignment: .center)
         .overlay(alignment: .bottom) { Divider().overlay(OB.hairline) }

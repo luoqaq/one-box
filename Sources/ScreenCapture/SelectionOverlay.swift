@@ -7,7 +7,7 @@ enum OverlayCompletion {
     case confirmed(CapturedImage)
 }
 
-/// 全屏选区 + 贴图标注控制器（微信式：框选后原地标注，右上工具 / 右下确认）。
+/// 全屏选区 + 贴图标注控制器（支持全屏定格后选区调整与标注双套操作并行）。
 @MainActor
 final class SelectionOverlayController: NSObject, NSTextFieldDelegate {
 
@@ -15,9 +15,9 @@ final class SelectionOverlayController: NSObject, NSTextFieldDelegate {
 
     private static var current: SelectionOverlayController?
 
-    private enum Phase {
-        case selecting
-        case annotating
+    private enum Mode {
+        case live(snapshots: [ScreenSnapshot], crop: @MainActor (CGRect) throws -> CapturedImage)
+        case annotateOnly(CapturedImage)
     }
 
     private enum AnnotateTool: Int, CaseIterable {
@@ -38,7 +38,7 @@ final class SelectionOverlayController: NSObject, NSTextFieldDelegate {
         }
     }
 
-    /// 笔触/马赛克粗细档位（视图 point；马赛克再换算成像素块）。
+    /// 笔触/马赛克粗细档位（视图 point；导出时再按图像密度换算像素）。
     enum StrokePreset: Int, CaseIterable {
         case fine = 1
         case medium
@@ -52,7 +52,7 @@ final class SelectionOverlayController: NSObject, NSTextFieldDelegate {
             }
         }
 
-        /// 马赛克块边长（视图 point），乘 density 后写入 annotation.strokeWidth。
+        /// 马赛克块边长（视图 point）。
         var mosaicBlockPoints: CGFloat {
             switch self {
             case .fine: return 6
@@ -70,35 +70,70 @@ final class SelectionOverlayController: NSObject, NSTextFieldDelegate {
         }
     }
 
+    /// 全局 AppKit point 坐标下的标注，使选区缩放/移动时已画标注保持原地不动。
+    private struct OverlayAnnotation {
+        var kind: Annotation.Kind
+        var globalRect: CGRect
+        var startPoint: CGPoint?
+        var endPoint: CGPoint?
+        var color: AnnotationColor
+        var lineWidth: CGFloat
+        var text: String?
+        var fontSize: CGFloat
+    }
+
+    private struct PixelSource {
+        let frame: CGRect
+        let width: Int
+        let height: Int
+        let bytesPerRow: Int
+        let pixels: [UInt8]
+    }
+
     private var continuation: CheckedContinuation<OverlayCompletion, Never>?
     private var windows: [OverlayWindow] = []
     private var keyMonitor: Any?
     /// 不全屏 activate 时，Esc 等键仍需在其他 App（含全屏 Space）前台时可用。
     private var globalKeyMonitor: Any?
     private var finished = false
-    private var phase: Phase = .selecting
+    private var mode: Mode?
 
-    /// 选区确认后捕获；第二参数为本遮罩各窗的 CGWindowID，供滤镜排除。
-    private var captureHandler: ((CGRect, [CGWindowID]) async throws -> CapturedImage)?
+    private var isLiveMode: Bool {
+        if case .live = mode { return true }
+        return false
+    }
 
-    private var anchor: CGPoint?
+    private enum SelectionDragKind {
+        case create(anchor: CGPoint)
+        case move(startPoint: CGPoint, original: CGRect)
+        case resize(handle: SelectionEditing.Handle, original: CGRect)
+    }
+
+    private static let handleHitSlop: CGFloat = 11
+    /// 边框拖动环带向选区外侧偏置，把内部尽量让给贴边标注起笔。
+    private static let frameHitOutset: CGFloat = 12
+    private static let frameHitInset: CGFloat = 3
+    private static let selectionBorderWidth: CGFloat = 3
+
+    private var selectionDrag: SelectionDragKind?
     private var dragActive = false
     private var selectionRect: CGRect?
 
-    private var captured: CapturedImage?
-    private var annotations: [Annotation] = []
-    private var redoStack: [Annotation] = []
-    private var activeTool: AnnotateTool = .rectangle
+    private var annotations: [OverlayAnnotation] = []
+    private var redoStack: [OverlayAnnotation] = []
+    private var activeTool: AnnotateTool?
     private var strokeColor = AnnotationColor.red
     private var strokePreset: StrokePreset = .medium
     private var annotateDragStart: CGPoint?
     private var annotateDragCurrent: CGPoint?
-    /// 底图像素缓冲，供预览层画真实马赛克（与 Renderer 同源算法）。
-    private var mosaicSource: (width: Int, height: Int, bytesPerRow: Int, pixels: [UInt8])?
+    /// 按屏幕帧或单图延迟生成的像素缓冲，供实时马赛克预览。
+    private var pixelSources: [PixelSource] = []
 
     private var toolDock: AnnotateToolDock?
     private var textField: NSTextField?
     private var pendingTextOrigin: CGPoint?
+    private var lockedDragCursor: NSCursor?
+    private var appliedCursor: NSCursor?
 
     fileprivate static let palette: [AnnotationColor] = [
         .red, .blue, .yellow, .green, .white,
@@ -108,16 +143,17 @@ final class SelectionOverlayController: NSObject, NSTextFieldDelegate {
 
     // MARK: - 生命周期
 
-    /// 框选 → 捕获 → 贴图标注。
+    /// 全屏定格后并行框选调整与标注。
     static func run(
-        capture: @escaping @MainActor (CGRect, [CGWindowID]) async throws -> CapturedImage
+        snapshots: [ScreenSnapshot],
+        crop: @escaping @MainActor (CGRect) throws -> CapturedImage
     ) async -> OverlayCompletion {
         let controller = SelectionOverlayController()
-        controller.captureHandler = capture
+        controller.mode = .live(snapshots: snapshots, crop: crop)
         current = controller
         return await withCheckedContinuation { continuation in
             MainActor.assumeIsolated {
-                controller.startSelecting(continuation: continuation)
+                controller.startLiveSelection(continuation: continuation)
             }
         }
     }
@@ -125,6 +161,7 @@ final class SelectionOverlayController: NSObject, NSTextFieldDelegate {
     /// 直接进入贴图标注（历史「继续标注」）。
     static func runAnnotate(captured: CapturedImage) async -> OverlayCompletion {
         let controller = SelectionOverlayController()
+        controller.mode = .annotateOnly(captured)
         current = controller
         return await withCheckedContinuation { continuation in
             MainActor.assumeIsolated {
@@ -133,13 +170,13 @@ final class SelectionOverlayController: NSObject, NSTextFieldDelegate {
         }
     }
 
-    private func startSelecting(continuation: CheckedContinuation<OverlayCompletion, Never>) {
+    private func startLiveSelection(continuation: CheckedContinuation<OverlayCompletion, Never>) {
         guard openWindows() else {
             continuation.resume(returning: .canceled)
             return
         }
         self.continuation = continuation
-        phase = .selecting
+        activeTool = nil
         NSCursor.crosshair.push()
     }
 
@@ -166,7 +203,15 @@ final class SelectionOverlayController: NSObject, NSTextFieldDelegate {
             width: displaySize.width,
             height: displaySize.height
         )
-        enterAnnotating(with: captured, pushCursor: true)
+        activeTool = .rectangle
+        NSCursor.crosshair.push()
+        ensureToolDock()
+        toolDock?.selectTool(tag: activeTool?.rawValue)
+        toolDock?.selectColor(index: Self.palette.firstIndex(of: strokeColor) ?? 0)
+        toolDock?.selectStroke(tag: strokePreset.rawValue)
+        toolDock?.updateHistoryEnabled(canUndo: false, canRedo: false)
+        layoutChrome()
+        refresh()
     }
 
     private func openWindows() -> Bool {
@@ -239,16 +284,12 @@ final class SelectionOverlayController: NSObject, NSTextFieldDelegate {
                 commitTextInput()
                 return nil
             }
-            if phase == .selecting, let selection = selectionRect, !dragActive {
-                Task { await confirmSelection(selection) }
-                return nil
-            }
-            if phase == .annotating {
-                confirmAnnotate()
+            if selectionRect != nil, !dragActive {
+                confirmAndFinish()
                 return nil
             }
         case 51, 117: // Delete / Forward Delete
-            if phase == .annotating, textField == nil {
+            if textField == nil, !annotations.isEmpty {
                 undoAnnotation()
                 return nil
             }
@@ -256,7 +297,7 @@ final class SelectionOverlayController: NSObject, NSTextFieldDelegate {
             break
         }
         // ⌘Z / ⇧⌘Z
-        if phase == .annotating, textField == nil,
+        if textField == nil,
            event.modifierFlags.contains(.command),
            event.charactersIgnoringModifiers?.lowercased() == "z" {
             if event.modifierFlags.contains(.shift) {
@@ -269,53 +310,9 @@ final class SelectionOverlayController: NSObject, NSTextFieldDelegate {
         return event
     }
 
-    // MARK: - 选区确认 → 捕获 → 标注
+    // MARK: - 标注历史与导出
 
-    private func confirmSelection(_ selection: CGRect) async {
-        guard phase == .selecting, let captureHandler, !finished else { return }
-        // 遮罩保持可见：捕获滤镜排除本窗，避免 orderOut → 截图 → 再显示的跳变。
-        let excludeIDs = windows.map { CGWindowID($0.windowNumber) }
-        do {
-            let captured = try await captureHandler(selection, excludeIDs)
-            // 与真实捕获矩形对齐，避免 point 取整后鼠标映射漂移
-            selectionRect = CGRect(
-                x: selection.minX.rounded(.down),
-                y: selection.minY.rounded(.down),
-                width: captured.pointSize.width,
-                height: captured.pointSize.height
-            )
-            enterAnnotating(with: captured, pushCursor: false)
-        } catch {
-            finish(.canceled)
-        }
-    }
-
-    private func enterAnnotating(with captured: CapturedImage, pushCursor: Bool) {
-        self.captured = captured
-        phase = .annotating
-        dragActive = false
-        anchor = nil
-        annotations = []
-        redoStack = []
-        annotateDragStart = nil
-        annotateDragCurrent = nil
-        mosaicSource = Self.makePixelBuffer(of: captured.image)
-        if pushCursor {
-            NSCursor.crosshair.push()
-        }
-        NSCursor.arrow.set()
-        toolDock = AnnotateToolDock(
-            target: self,
-            selectedToolTag: activeTool.rawValue,
-            selectedColorIndex: Self.palette.firstIndex(of: strokeColor) ?? 0,
-            selectedStrokeTag: strokePreset.rawValue
-        )
-        toolDock?.updateHistoryEnabled(canUndo: false, canRedo: false)
-        layoutChrome()
-        refresh()
-    }
-
-    private func pushAnnotation(_ annotation: Annotation) {
+    private func pushAnnotation(_ annotation: OverlayAnnotation) {
         annotations.append(annotation)
         redoStack.removeAll()
         refresh()
@@ -323,20 +320,20 @@ final class SelectionOverlayController: NSObject, NSTextFieldDelegate {
     }
 
     private func undoAnnotation() {
-        guard phase == .annotating, textField == nil, let last = annotations.popLast() else { return }
+        guard textField == nil, let last = annotations.popLast() else { return }
         redoStack.append(last)
         refresh()
         toolDock?.updateHistoryEnabled(canUndo: !annotations.isEmpty, canRedo: !redoStack.isEmpty)
     }
 
     private func redoAnnotation() {
-        guard phase == .annotating, textField == nil, let next = redoStack.popLast() else { return }
+        guard textField == nil, let next = redoStack.popLast() else { return }
         annotations.append(next)
         refresh()
         toolDock?.updateHistoryEnabled(canUndo: !annotations.isEmpty, canRedo: !redoStack.isEmpty)
     }
 
-    private static func makePixelBuffer(of image: CGImage) -> (width: Int, height: Int, bytesPerRow: Int, pixels: [UInt8])? {
+    private static func makePixelBuffer(of image: CGImage, frame: CGRect) -> PixelSource? {
         let width = image.width
         let height = image.height
         guard width > 0, height > 0 else { return nil }
@@ -357,25 +354,112 @@ final class SelectionOverlayController: NSObject, NSTextFieldDelegate {
             return true
         }
         guard ok else { return nil }
-        return (width, height, width * 4, buffer)
+        return PixelSource(frame: frame, width: width, height: height, bytesPerRow: width * 4, pixels: buffer)
     }
 
-    private func confirmAnnotate() {
-        guard phase == .annotating, let captured else { return }
+    /// 延迟准备马赛克像素缓冲，避免未用打码时拷贝全屏 RGBA。
+    private func pixelSource(containing globalPoint: CGPoint) -> PixelSource? {
+        if let existing = pixelSources.first(where: { $0.frame.contains(globalPoint) }) {
+            return existing
+        }
+        switch mode {
+        case .live(let snapshots, _):
+            guard let snap = snapshots.first(where: { $0.frame.contains(globalPoint) }),
+                  let built = Self.makePixelBuffer(of: snap.image, frame: snap.frame) else { return nil }
+            pixelSources.append(built)
+            return built
+        case .annotateOnly(let captured):
+            guard let selection = selectionRect,
+                  let built = Self.makePixelBuffer(of: captured.image, frame: selection) else { return nil }
+            pixelSources.append(built)
+            return built
+        case nil:
+            return nil
+        }
+    }
+
+    private func confirmAndFinish() {
+        guard let selection = selectionRect, let mode else { return }
         commitTextInput()
+
+        let baseCaptured: CapturedImage
+        let exportSelection: CGRect
+        switch mode {
+        case .live(_, let crop):
+            exportSelection = CGRect(
+                x: selection.minX.rounded(.down),
+                y: selection.minY.rounded(.down),
+                width: selection.width.rounded(.down),
+                height: selection.height.rounded(.down)
+            )
+            do {
+                baseCaptured = try crop(exportSelection)
+            } catch {
+                finish(.canceled)
+                return
+            }
+        case .annotateOnly(let captured):
+            exportSelection = selection
+            baseCaptured = captured
+        }
+
+        let exportAnnotations = Self.toExportAnnotations(
+            annotations,
+            selection: exportSelection,
+            imageSize: CGSize(width: baseCaptured.image.width, height: baseCaptured.image.height)
+        )
         do {
-            let rendered = try AnnotationRenderer.render(base: captured.image, annotations: annotations)
-            let png = try AnnotationRenderer.pngData(base: captured.image, annotations: annotations)
+            let rendered = try AnnotationRenderer.render(base: baseCaptured.image, annotations: exportAnnotations)
+            let png = try AnnotationRenderer.pngData(base: baseCaptured.image, annotations: exportAnnotations)
             let result = CapturedImage(
                 image: rendered,
                 pngData: png,
-                pointSize: captured.pointSize,
+                pointSize: baseCaptured.pointSize,
                 pixelSize: CGSize(width: rendered.width, height: rendered.height)
             )
             finish(.confirmed(result))
         } catch {
-            // 渲染失败时退回原图，仍可复制
-            finish(.confirmed(captured))
+            finish(.confirmed(baseCaptured))
+        }
+    }
+
+    private static func toExportAnnotations(
+        _ items: [OverlayAnnotation],
+        selection: CGRect,
+        imageSize: CGSize
+    ) -> [Annotation] {
+        guard selection.width > 0, selection.height > 0 else { return [] }
+        let densityX = imageSize.width / selection.width
+        let densityY = imageSize.height / selection.height
+        let density = max(densityX, densityY)
+
+        func toPixel(_ global: CGPoint) -> CGPoint {
+            CGPoint(
+                x: (global.x - selection.minX) * densityX,
+                y: (selection.maxY - global.y) * densityY
+            )
+        }
+
+        func toPixelRect(_ globalRect: CGRect) -> CGRect {
+            CGRect(
+                x: (globalRect.minX - selection.minX) * densityX,
+                y: (selection.maxY - globalRect.maxY) * densityY,
+                width: globalRect.width * densityX,
+                height: globalRect.height * densityY
+            )
+        }
+
+        return items.map { item in
+            Annotation(
+                kind: item.kind,
+                rect: toPixelRect(item.globalRect),
+                startPoint: item.startPoint.map(toPixel),
+                endPoint: item.endPoint.map(toPixel),
+                color: item.color,
+                strokeWidth: item.lineWidth * density,
+                text: item.text,
+                fontSize: item.fontSize * density
+            )
         }
     }
 
@@ -384,8 +468,17 @@ final class SelectionOverlayController: NSObject, NSTextFieldDelegate {
     @objc func toolButtonTapped(_ sender: NSButton) {
         guard let tool = AnnotateTool(rawValue: sender.tag) else { return }
         commitTextInput()
-        activeTool = tool
-        toolDock?.selectTool(tag: tool.rawValue)
+        if isLiveMode, activeTool == tool {
+            // 再次点击当前高亮工具可取消选中，回到内部直接拖动选区
+            activeTool = nil
+        } else {
+            activeTool = tool
+        }
+        toolDock?.selectTool(tag: activeTool?.rawValue)
+        if let loc = windows.first?.mouseLocationOutsideOfEventStream {
+            let global = CGPoint(x: loc.x + (windows.first?.frame.minX ?? 0), y: loc.y + (windows.first?.frame.minY ?? 0))
+            updateHoverCursor(at: global)
+        }
     }
 
     @objc func colorSwatchTapped(_ sender: NSButton) {
@@ -401,7 +494,6 @@ final class SelectionOverlayController: NSObject, NSTextFieldDelegate {
         commitTextInput()
         strokePreset = preset
         toolDock?.selectStroke(tag: preset.rawValue)
-        // 拖拽中切换粗细时立刻反映到草稿
         if annotateDragStart != nil {
             refresh()
         }
@@ -421,51 +513,198 @@ final class SelectionOverlayController: NSObject, NSTextFieldDelegate {
         guard let tag = AnnotateToolDock.ActionTag(rawValue: sender.tag) else { return }
         switch tag {
         case .confirm:
-            confirmAnnotate()
+            confirmAndFinish()
         case .cancel:
             finish(.canceled)
         }
     }
 
-    // MARK: - 鼠标：选区
+    // MARK: - 鼠标：选区与标注并行路由
 
     fileprivate func beginDrag(at globalPoint: CGPoint) {
-        if phase == .annotating {
+        if !isLiveMode {
             beginAnnotateDrag(at: globalPoint)
             return
         }
-        anchor = globalPoint
+        if let existing = selectionRect {
+            switch SelectionEditing.hitTest(
+                point: globalPoint,
+                in: existing,
+                handleSlop: Self.handleHitSlop,
+                edgeOutset: Self.frameHitOutset,
+                edgeInset: Self.frameHitInset
+            ) {
+            case .handle(let handle):
+                commitTextInput()
+                selectionDrag = .resize(handle: handle, original: existing)
+                dragActive = true
+                toolDock?.isHidden = true
+                let cursor = cursorForHandle(handle)
+                lockedDragCursor = cursor
+                applyCursor(cursor)
+                refresh()
+                return
+            case .frame:
+                commitTextInput()
+                selectionDrag = .move(startPoint: globalPoint, original: existing)
+                dragActive = true
+                toolDock?.isHidden = true
+                lockedDragCursor = .closedHand
+                applyCursor(.closedHand)
+                refresh()
+                return
+            case .interior:
+                if activeTool != nil {
+                    beginAnnotateDrag(at: globalPoint)
+                } else {
+                    selectionDrag = .move(startPoint: globalPoint, original: existing)
+                    dragActive = true
+                    toolDock?.isHidden = true
+                    lockedDragCursor = .closedHand
+                    applyCursor(.closedHand)
+                    refresh()
+                }
+                return
+            case .none:
+                break
+            }
+        }
+        commitTextInput()
+        selectionDrag = .create(anchor: globalPoint)
         dragActive = true
         selectionRect = nil
+        toolDock?.isHidden = true
+        lockedDragCursor = .crosshair
+        applyCursor(.crosshair)
         refresh()
     }
 
     fileprivate func updateDrag(to globalPoint: CGPoint) {
-        if phase == .annotating {
+        if let lockedDragCursor {
+            applyCursor(lockedDragCursor)
+        }
+        if annotateDragStart != nil {
             updateAnnotateDrag(to: globalPoint)
             return
         }
-        guard let anchor else { return }
-        selectionRect = Self.rect(from: anchor, to: globalPoint)
+        guard let selectionDrag else { return }
+        applySelectionDrag(selectionDrag, to: globalPoint)
         refresh()
     }
 
     fileprivate func endDrag(at globalPoint: CGPoint) {
-        if phase == .annotating {
+        if annotateDragStart != nil {
             endAnnotateDrag(at: globalPoint)
+            lockedDragCursor = nil
+            updateHoverCursor(at: globalPoint)
             return
         }
-        guard let anchor else { return }
-        let rect = Self.rect(from: anchor, to: globalPoint)
-        self.anchor = nil
-        dragActive = false
-        if rect.width >= Self.minimumSelectionSize, rect.height >= Self.minimumSelectionSize {
-            selectionRect = rect
-            Task { await confirmSelection(rect) }
-        } else {
-            selectionRect = nil
-            refresh()
+        guard let selectionDrag else { return }
+        switch selectionDrag {
+        case .create(let anchor):
+            let rect = Self.rect(from: anchor, to: globalPoint)
+            if rect.width >= Self.minimumSelectionSize, rect.height >= Self.minimumSelectionSize {
+                selectionRect = rect
+            } else {
+                selectionRect = nil
+            }
+        case .move, .resize:
+            applySelectionDrag(selectionDrag, to: globalPoint)
+            if let rect = selectionRect,
+               rect.width < Self.minimumSelectionSize || rect.height < Self.minimumSelectionSize {
+                selectionRect = nil
+            }
         }
+        self.selectionDrag = nil
+        dragActive = false
+        lockedDragCursor = nil
+        refresh()
+        updateHoverCursor(at: globalPoint)
+    }
+
+    private func applySelectionDrag(_ kind: SelectionDragKind, to globalPoint: CGPoint) {
+        switch kind {
+        case .create(let anchor):
+            selectionRect = Self.rect(from: anchor, to: globalPoint)
+        case .move(let startPoint, let original):
+            selectionRect = SelectionEditing.move(
+                original,
+                by: CGVector(dx: globalPoint.x - startPoint.x, dy: globalPoint.y - startPoint.y)
+            )
+        case .resize(let handle, let original):
+            selectionRect = SelectionEditing.resize(
+                original,
+                handle: handle,
+                to: globalPoint,
+                minimumSize: Self.minimumSelectionSize
+            )
+        }
+    }
+
+    /// 悬停光标：拖拽期间锁定当前光标；悬停时按手柄/边框/内部态切换。
+    fileprivate func updateHoverCursor(at globalPoint: CGPoint) {
+        if let lockedDragCursor {
+            applyCursor(lockedDragCursor)
+            return
+        }
+        guard !dragActive else { return }
+        if isPointOverToolDock(globalPoint) {
+            applyCursor(.arrow)
+            return
+        }
+        if !isLiveMode {
+            applyCursor(activeTool == .text ? .iBeam : .crosshair)
+            return
+        }
+        guard let selection = selectionRect else {
+            applyCursor(.crosshair)
+            return
+        }
+        switch SelectionEditing.hitTest(
+            point: globalPoint,
+            in: selection,
+            handleSlop: Self.handleHitSlop,
+            edgeOutset: Self.frameHitOutset,
+            edgeInset: Self.frameHitInset
+        ) {
+        case .handle(let handle):
+            applyCursor(cursorForHandle(handle))
+        case .frame:
+            applyCursor(.openHand)
+        case .interior:
+            if let tool = activeTool {
+                applyCursor(tool == .text ? .iBeam : .crosshair)
+            } else {
+                applyCursor(.openHand)
+            }
+        case .none:
+            applyCursor(.crosshair)
+        }
+    }
+
+    private func cursorForHandle(_ handle: SelectionEditing.Handle) -> NSCursor {
+        switch handle {
+        case .top, .bottom:
+            return .resizeUpDown
+        case .left, .right:
+            return .resizeLeftRight
+        case .topLeft, .topRight, .bottomLeft, .bottomRight:
+            return .crosshair
+        }
+    }
+
+    private func isPointOverToolDock(_ globalPoint: CGPoint) -> Bool {
+        guard let dock = toolDock, !dock.isHidden, let hostWindow = dock.window else { return false }
+        let globalFrame = dock.frame.offsetBy(dx: hostWindow.frame.minX, dy: hostWindow.frame.minY)
+        return globalFrame.contains(globalPoint)
+    }
+
+    private func applyCursor(_ cursor: NSCursor) {
+        if appliedCursor === cursor && NSCursor.current === cursor {
+            return
+        }
+        appliedCursor = cursor
+        cursor.set()
     }
 
     private static func rect(from a: CGPoint, to b: CGPoint) -> CGRect {
@@ -481,15 +720,18 @@ final class SelectionOverlayController: NSObject, NSTextFieldDelegate {
 
     private func beginAnnotateDrag(at globalPoint: CGPoint) {
         commitTextInput()
-        guard let selection = selectionRect, selection.contains(globalPoint) else { return }
+        guard let tool = activeTool,
+              let selection = selectionRect,
+              selection.contains(globalPoint) else { return }
         annotateDragStart = globalPoint
         annotateDragCurrent = globalPoint
-        if activeTool == .text {
-            // 文字：单击落点，弹出输入框
+        let cursor: NSCursor = tool == .text ? .iBeam : .crosshair
+        lockedDragCursor = cursor
+        applyCursor(cursor)
+        if tool == .text {
             pendingTextOrigin = globalPoint
             return
         }
-        annotateDragCurrent = globalPoint
         refresh()
     }
 
@@ -504,7 +746,8 @@ final class SelectionOverlayController: NSObject, NSTextFieldDelegate {
             annotateDragStart = nil
             annotateDragCurrent = nil
         }
-        if activeTool == .text {
+        guard let tool = activeTool else { return }
+        if tool == .text {
             if let origin = pendingTextOrigin ?? annotateDragStart {
                 beginTextInput(at: origin)
             }
@@ -513,9 +756,12 @@ final class SelectionOverlayController: NSObject, NSTextFieldDelegate {
         }
         guard let start = annotateDragStart else { return }
         let end = clampToSelection(globalPoint)
-        let annotation = makeDraft(from: start, to: end)
-        let minSpan: CGFloat = activeTool == .line || activeTool == .arrow ? 4 : 6
-        if annotation.rect.width < minSpan && annotation.rect.height < minSpan,
+        guard let annotation = makeDraft(tool: tool, from: start, to: end) else {
+            refresh()
+            return
+        }
+        let minSpan: CGFloat = tool == .line || tool == .arrow ? 4 : 6
+        if annotation.globalRect.width < minSpan && annotation.globalRect.height < minSpan,
            annotation.kind != .line, annotation.kind != .arrow {
             refresh()
             return
@@ -535,47 +781,62 @@ final class SelectionOverlayController: NSObject, NSTextFieldDelegate {
         )
     }
 
-    /// 全局 AppKit 点 → 图像像素坐标（左上原点）。
-    private func pixelPoint(from global: CGPoint) -> CGPoint? {
-        guard let selection = selectionRect, let captured else { return nil }
-        return ScreenGeometry.pixelPoint(
-            global: clampToSelection(global),
-            selection: selection,
-            imageSize: CGSize(width: captured.image.width, height: captured.image.height)
-        )
-    }
-
-    private func makeDraft(from globalStart: CGPoint, to globalEnd: CGPoint) -> Annotation {
-        let p0 = pixelPoint(from: globalStart) ?? .zero
-        let p1 = pixelPoint(from: globalEnd) ?? .zero
+    private func makeDraft(tool: AnnotateTool, from globalStart: CGPoint, to globalEnd: CGPoint) -> OverlayAnnotation? {
+        let p0 = clampToSelection(globalStart)
+        let p1 = clampToSelection(globalEnd)
         let rect = CGRect(
             x: min(p0.x, p1.x),
             y: min(p0.y, p1.y),
             width: max(abs(p1.x - p0.x), 1),
             height: max(abs(p1.y - p0.y), 1)
         )
-        // 线宽/马赛克块按图像像素密度放大，使导出与屏幕预览接近
-        let density: CGFloat = {
-            guard let selection = selectionRect, let captured else { return 1 }
-            return CGFloat(captured.image.width) / max(selection.width, 1)
-        }()
-        let pixelStroke = strokePreset.lineWidth * density
-        let mosaicBlock = strokePreset.mosaicBlockPoints * density
-        switch activeTool {
+        switch tool {
         case .rectangle:
-            return Annotation(kind: .rectangle, rect: rect, color: strokeColor, strokeWidth: pixelStroke)
+            return OverlayAnnotation(
+                kind: .rectangle,
+                globalRect: rect,
+                color: strokeColor,
+                lineWidth: strokePreset.lineWidth,
+                fontSize: 16
+            )
         case .mosaic:
-            // strokeWidth 对马赛克表示「块边长（像素）」
-            return Annotation(kind: .mosaic, rect: rect, color: strokeColor, strokeWidth: mosaicBlock)
+            return OverlayAnnotation(
+                kind: .mosaic,
+                globalRect: rect,
+                color: strokeColor,
+                lineWidth: strokePreset.mosaicBlockPoints,
+                fontSize: 16
+            )
         case .line:
-            return Annotation(kind: .line, rect: rect, startPoint: p0, endPoint: p1,
-                              color: strokeColor, strokeWidth: pixelStroke)
+            return OverlayAnnotation(
+                kind: .line,
+                globalRect: rect,
+                startPoint: p0,
+                endPoint: p1,
+                color: strokeColor,
+                lineWidth: strokePreset.lineWidth,
+                fontSize: 16
+            )
         case .arrow:
-            return Annotation(kind: .arrow, rect: rect, startPoint: p0, endPoint: p1,
-                              color: strokeColor, strokeWidth: pixelStroke)
+            return OverlayAnnotation(
+                kind: .arrow,
+                globalRect: rect,
+                startPoint: p0,
+                endPoint: p1,
+                color: strokeColor,
+                lineWidth: strokePreset.lineWidth,
+                fontSize: 16
+            )
         case .text:
-            let textRect = CGRect(x: p0.x, y: p0.y, width: 220 * density, height: 40 * density)
-            return Annotation(kind: .text, rect: textRect, color: strokeColor, text: "", fontSize: 16 * density)
+            let textRect = CGRect(x: p0.x, y: p0.y - 20, width: 220, height: 32)
+            return OverlayAnnotation(
+                kind: .text,
+                globalRect: textRect,
+                color: strokeColor,
+                lineWidth: strokePreset.lineWidth,
+                text: "",
+                fontSize: 16
+            )
         }
     }
 
@@ -611,14 +872,14 @@ final class SelectionOverlayController: NSObject, NSTextFieldDelegate {
         field.removeFromSuperview()
         textField = nil
         pendingTextOrigin = nil
-        guard !text.isEmpty, let origin, var annotation = Optional(makeDraft(from: origin, to: origin)) else {
+        guard !text.isEmpty, let origin,
+              var annotation = makeDraft(tool: .text, from: origin, to: origin) else {
             refresh()
             return
         }
         annotation.text = text
-        // 按字数估宽
         let width = max(120, CGFloat(text.count) * annotation.fontSize * 0.7)
-        annotation.rect = CGRect(x: annotation.rect.minX, y: annotation.rect.minY, width: width, height: max(34, annotation.fontSize + 12))
+        annotation.globalRect = CGRect(x: origin.x, y: origin.y - 14, width: width, height: 28)
         pushAnnotation(annotation)
     }
 
@@ -632,22 +893,45 @@ final class SelectionOverlayController: NSObject, NSTextFieldDelegate {
         commitTextInput()
     }
 
-    // MARK: - chrome 布局（统一底部悬浮工具栏）
+    // MARK: - chrome 布局
 
     private func layoutChrome() {
-        guard let selection = selectionRect else { return }
+        guard let selection = selectionRect else {
+            toolDock?.isHidden = true
+            return
+        }
+        guard !dragActive else {
+            toolDock?.isHidden = true
+            return
+        }
+        ensureToolDock()
         layoutToolDock(selection: selection)
+    }
+
+    private func ensureToolDock() {
+        guard toolDock == nil else { return }
+        toolDock = AnnotateToolDock(
+            target: self,
+            selectedToolTag: activeTool?.rawValue,
+            selectedColorIndex: Self.palette.firstIndex(of: strokeColor) ?? 0,
+            selectedStrokeTag: strokePreset.rawValue
+        )
+        toolDock?.updateHistoryEnabled(canUndo: !annotations.isEmpty, canRedo: !redoStack.isEmpty)
     }
 
     private func layoutToolDock(selection: CGRect) {
         guard let dock = toolDock else { return }
         let size = dock.fittingSize
+        placeDock(dock, selection: selection, size: size)
+    }
+
+    /// 优先选区底部外侧右对齐；底部不够则翻到顶部外侧；都不够则贴选区底部内侧。
+    private func placeDock(_ dock: NSView, selection: CGRect, size: CGSize) {
         let width = max(size.width, 1)
         let height = max(size.height, 1)
         let hostScreen = NSScreen.screens.first {
             $0.frame.contains(CGPoint(x: selection.midX, y: selection.midY))
         }
-        // 优先选区底部外侧右对齐；底部不够则翻到顶部外侧；都不够则贴选区底部内侧
         var origin = CGPoint(x: selection.maxX - width, y: selection.minY - 10 - height)
         if let screen = hostScreen {
             if origin.y < screen.frame.minY + 6 {
@@ -686,9 +970,7 @@ final class SelectionOverlayController: NSObject, NSTextFieldDelegate {
         for window in windows {
             window.contentView?.needsDisplay = true
         }
-        if phase == .annotating {
-            layoutChrome()
-        }
+        layoutChrome()
     }
 
     // MARK: - 绘制
@@ -704,8 +986,14 @@ final class SelectionOverlayController: NSObject, NSTextFieldDelegate {
             )
         }
 
+        // 实时模式：先画定格全屏底图，再盖半透明遮罩（选区内挖空保留原图）
+        if case .live(let snapshots, _) = mode,
+           let snap = snapshots.first(where: { $0.frame == screenFrame }) {
+            drawCapturedImage(snap.image, in: bounds)
+        }
+
         NSColor(srgbRed: 10 / 255, green: 14 / 255, blue: 22 / 255, alpha: 0.48).setFill()
-        if let local = localSelection {
+        if let local = localSelection, isLiveMode {
             let hole = local.intersection(bounds)
             if !hole.isNull, hole.width > 0, hole.height > 0 {
                 let path = NSBezierPath()
@@ -720,163 +1008,134 @@ final class SelectionOverlayController: NSObject, NSTextFieldDelegate {
             bounds.fill()
         }
 
-        if phase == .selecting, selectionRect == nil || dragActive {
-            drawHintPill(in: bounds)
+        if isLiveMode {
+            drawHintPill(in: bounds, hasSelection: selectionRect != nil && !dragActive)
         }
 
         guard let sel = localSelection else { return }
 
-        if phase == .annotating, let base = captured?.image {
-            // 底图 + 视图坐标标注（跟鼠标对齐）；马赛克从像素缓冲采样，不是色块遮罩。
-            // 导出仍走 AnnotationRenderer，与预览算法一致。
-            drawCapturedImage(base, in: sel)
-            drawAnnotationsOverlay(in: sel, screenFrame: screenFrame)
-            if let start = annotateDragStart, let current = annotateDragCurrent, activeTool != .text {
-                drawDraftOverlay(from: start, to: current, screenFrame: screenFrame)
-            }
+        if case .annotateOnly(let captured) = mode {
+            drawCapturedImage(captured.image, in: sel)
         }
 
-        // 单层明黄选框（避免双线叠层造成的杂乱感）
-        let ring = NSColor(srgbRed: 250 / 255, green: 204 / 255, blue: 21 / 255, alpha: 0.92)
+        // 标注裁切在选区内绘制：选区缩放或移动时，已画标注锚定在屏幕原位，超出选区部分自动裁掉
+        if let cg = NSGraphicsContext.current?.cgContext {
+            cg.saveGState()
+            NSBezierPath(rect: sel).addClip()
+            drawAnnotationsOverlay(screenFrame: screenFrame)
+            if let start = annotateDragStart, let current = annotateDragCurrent,
+               let tool = activeTool, tool != .text {
+                drawDraftOverlay(tool: tool, from: start, to: current, screenFrame: screenFrame)
+            }
+            cg.restoreGState()
+        }
+
+        // 加粗明黄选框
+        let ring = NSColor(srgbRed: 250 / 255, green: 204 / 255, blue: 21 / 255, alpha: 0.95)
         ring.setStroke()
-        let borderPath = NSBezierPath(rect: sel.insetBy(dx: -0.75, dy: -0.75))
-        borderPath.lineWidth = 1.5
+        let half = Self.selectionBorderWidth / 2
+        let borderPath = NSBezierPath(rect: sel.insetBy(dx: -half, dy: -half))
+        borderPath.lineWidth = Self.selectionBorderWidth
         borderPath.stroke()
 
-        if phase == .selecting {
+        // 实时模式下始终展示 8 向手柄与尺寸 HUD，随时可与标注并行调整选区
+        if isLiveMode {
             drawHandles(around: sel)
-            if dragActive {
-                drawSizeHUD(for: sel, in: bounds)
-            }
+            drawSizeHUD(for: sel, in: bounds)
         }
     }
 
-    /// 合成后的 CGImage 已是正向；遮罩视图的 CTM 与之同向，不再额外翻 Y
-    ///（此前翻 Y 是在掩盖合成颠倒，合成修好后再翻就会把预览弄反）。
-    private func drawCapturedImage(_ image: CGImage, in sel: CGRect) {
+    /// 合成后的 CGImage 已是正向；遮罩视图的 CTM 与之同向，不再额外翻 Y。
+    private func drawCapturedImage(_ image: CGImage, in rect: CGRect) {
         guard let cg = NSGraphicsContext.current?.cgContext else { return }
         cg.saveGState()
         cg.interpolationQuality = .high
-        cg.draw(image, in: sel)
+        cg.draw(image, in: rect)
         cg.restoreGState()
     }
 
-    private func drawAnnotationsOverlay(in sel: CGRect, screenFrame: CGRect) {
-        guard let selection = selectionRect, let captured else { return }
-        let imageSize = CGSize(width: captured.image.width, height: captured.image.height)
+    private func drawAnnotationsOverlay(screenFrame: CGRect) {
         for annotation in annotations {
-            drawAnnotation(annotation, selection: selection, imageSize: imageSize, screenFrame: screenFrame)
+            drawAnnotation(annotation, screenFrame: screenFrame)
         }
     }
 
-    private func drawDraftOverlay(from start: CGPoint, to end: CGPoint, screenFrame: CGRect) {
-        let p0 = CGPoint(x: start.x - screenFrame.minX, y: start.y - screenFrame.minY)
-        let p1 = CGPoint(x: end.x - screenFrame.minX, y: end.y - screenFrame.minY)
-        let color = NSColor(srgbRed: strokeColor.r, green: strokeColor.g, blue: strokeColor.b, alpha: 1)
-        switch activeTool {
-        case .rectangle:
-            let rect = Self.rect(from: p0, to: p1)
-            color.withAlphaComponent(0.08).setFill()
-            rect.fill()
-            color.setStroke()
-            let path = NSBezierPath(rect: rect)
-            path.lineWidth = strokeWidth
-            path.stroke()
-        case .mosaic:
-            let draft = makeDraft(from: start, to: end)
-            guard let selection = selectionRect else { return }
-            let imageSize = CGSize(
-                width: mosaicSource?.width ?? Int(draft.rect.width),
-                height: mosaicSource?.height ?? Int(draft.rect.height)
-            )
-            drawMosaicAnnotation(draft, selection: selection, imageSize: imageSize, screenFrame: screenFrame)
-        case .line:
-            color.setStroke()
-            let path = NSBezierPath()
-            path.move(to: p0)
-            path.line(to: p1)
-            path.lineWidth = strokeWidth
-            path.lineCapStyle = .round
-            path.stroke()
-        case .arrow:
-            drawArrow(from: p0, to: p1, color: color, strokeWidth: strokeWidth)
-        case .text:
-            break
-        }
+    private func drawDraftOverlay(tool: AnnotateTool, from start: CGPoint, to end: CGPoint, screenFrame: CGRect) {
+        guard let draft = makeDraft(tool: tool, from: start, to: end) else { return }
+        drawAnnotation(draft, screenFrame: screenFrame)
     }
 
-    private func drawAnnotation(
-        _ annotation: Annotation,
-        selection: CGRect,
-        imageSize: CGSize,
-        screenFrame: CGRect
-    ) {
+    private func drawAnnotation(_ annotation: OverlayAnnotation, screenFrame: CGRect) {
         let color = NSColor(
             srgbRed: annotation.color.r,
             green: annotation.color.g,
             blue: annotation.color.b,
             alpha: annotation.color.a
         )
-        let density = imageSize.width / max(selection.width, 1)
-        let viewStroke = max(annotation.strokeWidth / density, 1)
-
-        func toLocal(_ pixel: CGPoint) -> CGPoint {
-            let global = ScreenGeometry.globalPoint(pixel: pixel, selection: selection, imageSize: imageSize)
-            return CGPoint(x: global.x - screenFrame.minX, y: global.y - screenFrame.minY)
+        func toLocal(_ global: CGPoint) -> CGPoint {
+            CGPoint(x: global.x - screenFrame.minX, y: global.y - screenFrame.minY)
+        }
+        func toLocalRect(_ globalRect: CGRect) -> CGRect {
+            globalRect.offsetBy(dx: -screenFrame.minX, dy: -screenFrame.minY)
         }
 
         switch annotation.kind {
         case .rectangle:
-            let tl = toLocal(annotation.rect.origin)
-            let br = toLocal(CGPoint(x: annotation.rect.maxX, y: annotation.rect.maxY))
-            let rect = Self.rect(from: tl, to: br)
+            let rect = toLocalRect(annotation.globalRect)
             color.withAlphaComponent(0.08).setFill()
             rect.fill()
             color.setStroke()
             let path = NSBezierPath(rect: rect)
-            path.lineWidth = viewStroke
+            path.lineWidth = annotation.lineWidth
             path.stroke()
         case .mosaic:
-            drawMosaicAnnotation(annotation, selection: selection, imageSize: imageSize, screenFrame: screenFrame)
+            drawMosaicOverlay(
+                globalRect: annotation.globalRect,
+                blockPoints: annotation.lineWidth,
+                screenFrame: screenFrame
+            )
         case .line:
             guard let start = annotation.startPoint, let end = annotation.endPoint else { return }
-            let p0 = toLocal(start)
-            let p1 = toLocal(end)
             color.setStroke()
             let path = NSBezierPath()
-            path.move(to: p0)
-            path.line(to: p1)
-            path.lineWidth = viewStroke
+            path.move(to: toLocal(start))
+            path.line(to: toLocal(end))
+            path.lineWidth = annotation.lineWidth
             path.lineCapStyle = .round
             path.stroke()
         case .arrow:
             guard let start = annotation.startPoint, let end = annotation.endPoint else { return }
-            let p0 = toLocal(start)
-            let p1 = toLocal(end)
-            drawArrow(from: p0, to: p1, color: color, strokeWidth: viewStroke)
+            drawArrow(from: toLocal(start), to: toLocal(end), color: color, strokeWidth: annotation.lineWidth)
         case .text:
-            let origin = toLocal(annotation.rect.origin)
+            let localRect = toLocalRect(annotation.globalRect)
             let text = annotation.text ?? ""
-            let fontSize = annotation.fontSize / density
             let attrs: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: max(fontSize, 10), weight: .semibold),
+                .font: NSFont.systemFont(ofSize: max(annotation.fontSize, 10), weight: .semibold),
                 .foregroundColor: color,
             ]
-            (text as NSString).draw(at: origin, withAttributes: attrs)
+            (text as NSString).draw(at: localRect.origin, withAttributes: attrs)
         }
     }
 
-    /// 在视图坐标系画真实像素马赛克（采样底图，块大小来自 annotation.strokeWidth）。
-    private func drawMosaicAnnotation(
-        _ annotation: Annotation,
-        selection: CGRect,
-        imageSize: CGSize,
-        screenFrame: CGRect
-    ) {
-        guard let source = mosaicSource else { return }
-        let blockSize = AnnotationRenderer.mosaicBlockSize(for: annotation)
+    /// 在视图坐标系画真实像素马赛克（采样全屏/单图底图）。
+    private func drawMosaicOverlay(globalRect: CGRect, blockPoints: CGFloat, screenFrame: CGRect) {
+        let probe = CGPoint(x: screenFrame.midX, y: screenFrame.midY)
+        guard let source = pixelSource(containing: probe) else { return }
+        let clippedGlobal = globalRect.intersection(source.frame)
+        guard !clippedGlobal.isNull, clippedGlobal.width > 0, clippedGlobal.height > 0 else { return }
+
+        let scaleX = CGFloat(source.width) / max(source.frame.width, 1)
+        let scaleY = CGFloat(source.height) / max(source.frame.height, 1)
+        let density = max(scaleX, scaleY)
+        let blockSize = max(4, Int((blockPoints * density).rounded()))
         let block = CGFloat(blockSize)
-        let area = annotation.rect.intersection(CGRect(x: 0, y: 0, width: imageSize.width, height: imageSize.height))
+
+        let area = CGRect(
+            x: (clippedGlobal.minX - source.frame.minX) * scaleX,
+            y: (source.frame.maxY - clippedGlobal.maxY) * scaleY,
+            width: clippedGlobal.width * scaleX,
+            height: clippedGlobal.height * scaleY
+        ).intersection(CGRect(x: 0, y: 0, width: source.width, height: source.height))
         guard area.width > 0, area.height > 0 else { return }
 
         let startBlockX = Int(floor(area.minX / block)) * blockSize
@@ -884,9 +1143,10 @@ final class SelectionOverlayController: NSObject, NSTextFieldDelegate {
         let startBlockY = Int(floor(area.minY / block)) * blockSize
         let endY = Int(ceil(area.maxY))
 
-        func toLocal(_ pixel: CGPoint) -> CGPoint {
-            let global = ScreenGeometry.globalPoint(pixel: pixel, selection: selection, imageSize: imageSize)
-            return CGPoint(x: global.x - screenFrame.minX, y: global.y - screenFrame.minY)
+        func pixelToLocal(_ px: CGPoint) -> CGPoint {
+            let gx = source.frame.minX + px.x / scaleX
+            let gy = source.frame.maxY - px.y / scaleY
+            return CGPoint(x: gx - screenFrame.minX, y: gy - screenFrame.minY)
         }
 
         var blockX = startBlockX
@@ -903,8 +1163,8 @@ final class SelectionOverlayController: NSObject, NSTextFieldDelegate {
                     width: source.width,
                     height: source.height
                    ) {
-                    let tl = toLocal(CGPoint(x: region.minX, y: region.minY))
-                    let br = toLocal(CGPoint(x: region.maxX, y: region.maxY))
+                    let tl = pixelToLocal(CGPoint(x: region.minX, y: region.minY))
+                    let br = pixelToLocal(CGPoint(x: region.maxX, y: region.maxY))
                     let viewRect = Self.rect(from: tl, to: br)
                     NSColor(srgbRed: avg.r, green: avg.g, blue: avg.b, alpha: avg.a).setFill()
                     viewRect.fill()
@@ -973,18 +1233,14 @@ final class SelectionOverlayController: NSObject, NSTextFieldDelegate {
     }
 
     private func drawHandles(around sel: CGRect) {
-        let centers = [
-            CGPoint(x: sel.minX, y: sel.minY),
-            CGPoint(x: sel.maxX, y: sel.minY),
-            CGPoint(x: sel.minX, y: sel.maxY),
-            CGPoint(x: sel.maxX, y: sel.maxY),
-        ]
-        for center in centers {
-            let dot = NSBezierPath(ovalIn: CGRect(x: center.x - 4, y: center.y - 4, width: 8, height: 8))
+        let radius: CGFloat = 5
+        for (_, center) in SelectionEditing.handlePositions(in: sel) {
+            let rect = CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)
+            let dot = NSBezierPath(ovalIn: rect)
             NSColor.white.setFill()
             dot.fill()
             NSColor.black.withAlphaComponent(0.35).setStroke()
-            let outline = NSBezierPath(ovalIn: CGRect(x: center.x - 4, y: center.y - 4, width: 8, height: 8))
+            let outline = NSBezierPath(ovalIn: rect)
             outline.lineWidth = 1
             outline.stroke()
         }
@@ -1017,18 +1273,24 @@ final class SelectionOverlayController: NSObject, NSTextFieldDelegate {
         )
     }
 
-    private func drawHintPill(in bounds: CGRect) {
+    private func drawHintPill(in bounds: CGRect, hasSelection: Bool) {
         struct Segment {
             let text: String
             let isKey: Bool
         }
-        let segments: [Segment] = [
-            Segment(text: "拖拽框选区域", isKey: false),
-            Segment(text: "⏎", isKey: true),
-            Segment(text: "标注", isKey: false),
-            Segment(text: "⎋", isKey: true),
-            Segment(text: "取消", isKey: false),
-        ]
+        let segments: [Segment] = hasSelection
+            ? [
+                Segment(text: "拖边框/内部移动 · 拖手柄缩放 · 选工具标注", isKey: false),
+                Segment(text: "⏎", isKey: true),
+                Segment(text: "完成", isKey: false),
+                Segment(text: "⎋", isKey: true),
+                Segment(text: "取消", isKey: false),
+            ]
+            : [
+                Segment(text: "拖拽框选区域", isKey: false),
+                Segment(text: "⎋", isKey: true),
+                Segment(text: "取消", isKey: false),
+            ]
         let textFont = NSFont.systemFont(ofSize: 12)
         let keyFont = NSFont.systemFont(ofSize: 11, weight: .medium)
         let segmentGap: CGFloat = 8
@@ -1130,6 +1392,7 @@ final class OverlayWindow: NSPanel {
         acceptsMouseMovedEvents = true
         isFloatingPanel = true
         hidesOnDeactivate = false
+        animationBehavior = .none
         collectionBehavior = [
             .canJoinAllSpaces,
             .canJoinAllApplications,
@@ -1145,6 +1408,7 @@ final class OverlayWindow: NSPanel {
 final class SelectionOverlayView: NSView {
     private let controller: SelectionOverlayController
     private let screenFrame: CGRect
+    private var trackingArea: NSTrackingArea?
 
     init(controller: SelectionOverlayController, screenFrame: CGRect) {
         self.controller = controller
@@ -1163,6 +1427,30 @@ final class SelectionOverlayView: NSView {
     /// 快捷键从其他 App 拉起遮罩时，第一下点击仍要开始框选，不能只用来激活窗口。
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea {
+            removeTrackingArea(trackingArea)
+        }
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.cursorUpdate, .mouseMoved, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    /// 接管系统光标更新，避免 AppKit 在重绘或跨子视图时偷偷重置回默认箭头。
+    override func cursorUpdate(with event: NSEvent) {
+        controller.updateHoverCursor(at: globalLocation(of: event))
+    }
+
+    override func resetCursorRects() {
+        // 不调用 super，防止 AppKit 添加默认 arrow cursor rect。
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         controller.drawOverlay(in: self, screenFrame: screenFrame)
     }
@@ -1177,6 +1465,10 @@ final class SelectionOverlayView: NSView {
 
     override func mouseUp(with event: NSEvent) {
         controller.endDrag(at: globalLocation(of: event))
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        controller.updateHoverCursor(at: globalLocation(of: event))
     }
 
     /// 与绘制使用同一套 screenFrame 映射，避免 convertToScreen 与选区坐标系漂移。
@@ -1206,12 +1498,20 @@ final class AnnotateToolDock: NSStackView {
     private var undoButton: NSButton?
     private var redoButton: NSButton?
 
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .arrow)
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        NSCursor.arrow.set()
+    }
+
     private static let brandYellow = NSColor(srgbRed: 250 / 255, green: 204 / 255, blue: 21 / 255, alpha: 1)
     private static let darkInk = NSColor(srgbRed: 24 / 255, green: 24 / 255, blue: 27 / 255, alpha: 1)
 
     init(
         target: SelectionOverlayController,
-        selectedToolTag: Int,
+        selectedToolTag: Int?,
         selectedColorIndex: Int,
         selectedStrokeTag: Int
     ) {
@@ -1321,9 +1621,9 @@ final class AnnotateToolDock: NSStackView {
         fatalError("AnnotateToolDock 只在代码里创建")
     }
 
-    func selectTool(tag: Int) {
+    func selectTool(tag: Int?) {
         for button in toolButtons {
-            let on = button.tag == tag
+            let on = tag.map { button.tag == $0 } ?? false
             button.layer?.backgroundColor = on ? Self.brandYellow.cgColor : NSColor.clear.cgColor
             button.contentTintColor = on ? Self.darkInk : NSColor.white.withAlphaComponent(0.84)
         }

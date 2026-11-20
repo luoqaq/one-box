@@ -40,8 +40,10 @@ public struct ScreenshotsWorkbenchView: View {
         let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !q.isEmpty else { return model.captures }
         return model.captures.filter { record in
-            let name = record.file.replacingOccurrences(of: "captures/", with: "")
-            return name.lowercased().contains(q)
+            let title = OBTimeFormat.captureTitle(record.createdAt).lowercased()
+            let size = "\(record.width)×\(record.height) \(record.width) x \(record.height)"
+            let file = record.file.replacingOccurrences(of: "captures/", with: "").lowercased()
+            return title.contains(q) || size.contains(q) || file.contains(q)
         }
     }
 
@@ -169,7 +171,7 @@ public struct ScreenshotsWorkbenchView: View {
         }
         .padding(EdgeInsets(top: 18, leading: 20, bottom: 16, trailing: 20))
         .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(Color.white.opacity(0.34))
+        .background(OB.contentBg)
     }
 
     private var footer: some View {
@@ -222,11 +224,6 @@ public struct ScreenshotsWorkbenchView: View {
                 }
 
                 SettingsCard {
-                    SettingsRow(title: "启用截图与标注模块", desc: "关闭后注销全局截图热键并释放渲染上下文") {
-                        OBToggle(isOn: model.registry.isEnabled("screenshots")) {
-                            model.registry.toggleEnabled("screenshots")
-                        }
-                    }
                     SettingsRow(title: "区域截图快捷键", desc: "全局任意场景按下立即拉起全屏选区；框选后原地标注，对号复制") {
                         HotkeyButton(spec: model.settings.hotkeyCapture, onRecord: { spec in
                             model.settings.setHotkey(spec, for: "capture")
@@ -241,8 +238,17 @@ public struct ScreenshotsWorkbenchView: View {
 
 
                 SettingsCard {
-                    SettingsRow(title: "默认保存路径", desc: "导出 PNG 截图的默认目录") {
-                        PathChip(path: model.settings.captureSaveDirectory)
+                    SettingsRow(title: "默认保存路径", desc: model.settings.captureSaveDirectory.replacingOccurrences(of: NSHomeDirectory(), with: "~")) {
+                        HStack(spacing: 6) {
+                            OBButton(title: "更改…", style: .secondary) {
+                                chooseSaveDirectory()
+                            }
+                            OBButton(title: "打开", style: .secondary) {
+                                let url = URL(fileURLWithPath: model.settings.captureSaveDirectory, isDirectory: true)
+                                try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+                                NSWorkspace.shared.open(url)
+                            }
+                        }
                     }
                     SettingsRow(title: "保留最近截图记录", desc: "方便在工具内重新复制、继续标注或定位文件") {
                         OBToggle(isOn: model.settings.captureKeepRecords) {
@@ -269,9 +275,21 @@ public struct ScreenshotsWorkbenchView: View {
     // MARK: 动作
 
     private func captureName(_ record: CaptureRecord) -> String {
-        let id = record.file.replacingOccurrences(of: "captures/", with: "")
-            .replacingOccurrences(of: ".png", with: "")
-        return "截图 \(id.prefix(6))"
+        OBTimeFormat.captureTitle(record.createdAt)
+    }
+
+    private func chooseSaveDirectory() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = URL(fileURLWithPath: model.settings.captureSaveDirectory, isDirectory: true)
+        panel.prompt = "选择"
+        if panel.runModal() == .OK, let url = panel.url {
+            model.settings.captureSaveDirectory = url.path
+            model.showToast("已更新保存路径")
+        }
     }
 
     private func revealInFinder(_ record: CaptureRecord) {
@@ -377,13 +395,15 @@ struct CaptureRowView: View {
         HStack(spacing: 10) {
             CaptureThumbView(record: record)
             VStack(alignment: .leading, spacing: 2) {
-                Text("\(record.width) × \(record.height)")
+                Text(OBTimeFormat.captureTitle(record.createdAt))
                     .font(.system(size: 13, weight: .medium))
                     .foregroundColor(isSelected ? OB.accentInk : OB.ink)
-                Text(OBTimeFormat.short(record.createdAt))
+                    .lineLimit(1)
+                Text("\(record.width) × \(record.height) · \(OBFormat.bytes(record.byteCount))")
                     .font(.system(size: 11))
                     .foregroundColor(OB.ink3)
                     .monospacedDigit()
+                    .lineLimit(1)
             }
             Spacer(minLength: 0)
         }
@@ -417,7 +437,7 @@ struct CaptureThumbView: View {
                     .resizable()
                     .aspectRatio(contentMode: .fill)
             } else {
-                Color.white
+                OB.previewBg
             }
         }
         .frame(width: 62, height: 42)

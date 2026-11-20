@@ -5,6 +5,14 @@ import ImageIO
 import UniformTypeIdentifiers
 import ScreenCaptureKit
 
+/// 单个显示器的整屏定格快照（供全屏遮罩预览与离线裁剪共用）。
+struct ScreenSnapshot {
+    let frame: CGRect
+    let scale: CGFloat
+    let displayID: CGDirectDisplayID
+    let image: CGImage
+}
+
 /// 截图服务：权限检查、全屏选区遮罩、跨屏拆分捕获与合并。
 public final class ScreenCaptureService {
 
@@ -35,14 +43,14 @@ public final class ScreenCaptureService {
 
     // MARK: - 选区捕获
 
-    /// 全屏选区：框选后原地贴图标注；对号确认返回最终图，叉/Esc 取消。
+    /// 全屏选区：先静默全屏定格，再进入选区调整与标注并行的遮罩；对号/回车确认，叉/Esc 取消。
     public func requestSelectionCapture() async throws -> SelectionOutcome {
         guard authorizationStatus() else {
             throw ScreenCaptureError.notAuthorized
         }
-        let completion = await SelectionOverlayController.run { [weak self] rect, excludeIDs in
-            guard let self else { throw ScreenCaptureError.captureFailed("截图服务已释放") }
-            return try await self.capture(globalRect: rect, excludingWindowIDs: excludeIDs)
+        let snapshots = try await captureFullScreenSnapshots()
+        let completion = await SelectionOverlayController.run(snapshots: snapshots) { rect in
+            try Self.cropSnapshots(snapshots, globalRect: rect)
         }
         switch completion {
         case .canceled:
@@ -153,10 +161,90 @@ public final class ScreenCaptureService {
         }
         return try await captureScreenKitRect(screen: screen, localRect: localRect, primaryFrame: primaryFrame)
     }
-    /// ScreenCaptureKit 主路径：SCShareableContent 取显示器，SCScreenshotManager 整屏捕获后裁剪。
-    private func captureScreenKit(
+    // MARK: - 整屏定格与离线裁剪
+
+    /// 在打开遮罩前抓取所有显示器整屏图像。
+    private func captureFullScreenSnapshots() async throws -> [ScreenSnapshot] {
+        let screens = await MainActor.run { Self.currentScreens() }
+        guard let primaryFrame = screens.first?.frame else {
+            throw ScreenCaptureError.invalidSelection
+        }
+        var snapshots: [ScreenSnapshot] = []
+        snapshots.reserveCapacity(screens.count)
+        for screen in screens {
+            let fullImage: CGImage
+            if let image = try? await captureFullScreenImage(screen: screen, excludingWindowIDs: []) {
+                fullImage = image
+            } else {
+                fullImage = try await captureScreenKitRect(
+                    screen: screen,
+                    localRect: CGRect(origin: .zero, size: screen.frame.size),
+                    primaryFrame: primaryFrame
+                )
+            }
+            snapshots.append(
+                ScreenSnapshot(
+                    frame: screen.frame,
+                    scale: screen.scale,
+                    displayID: screen.displayID,
+                    image: fullImage
+                )
+            )
+        }
+        return snapshots
+    }
+
+    /// 从定格全屏快照中裁剪并合成任意全局矩形，无需再次触发系统截屏。
+    static func cropSnapshots(_ snapshots: [ScreenSnapshot], globalRect: CGRect) throws -> CapturedImage {
+        let rect = CGRect(
+            x: globalRect.minX.rounded(.down),
+            y: globalRect.minY.rounded(.down),
+            width: globalRect.width.rounded(.down),
+            height: globalRect.height.rounded(.down)
+        )
+        guard rect.width >= 1, rect.height >= 1 else {
+            throw ScreenCaptureError.invalidSelection
+        }
+        let parts = ScreenGeometry.splitRect(rect, screenFrames: snapshots.map(\.frame))
+        guard !parts.isEmpty else {
+            throw ScreenCaptureError.invalidSelection
+        }
+
+        let maxScale = snapshots.map(\.scale).max() ?? 2
+        let canvasSize = ScreenGeometry.canvasPixelSize(for: rect, scale: maxScale)
+        var subImages: [(globalRect: CGRect, image: CGImage)] = []
+        for part in parts {
+            let snapshot = snapshots[part.screenIndex]
+            let cropped = try cropFullImage(
+                snapshot.image,
+                screenFrame: snapshot.frame,
+                displayID: snapshot.displayID,
+                localRect: part.localRect
+            )
+            let partGlobal = part.localRect.offsetBy(dx: snapshot.frame.minX, dy: snapshot.frame.minY)
+            subImages.append((partGlobal, cropped))
+        }
+
+        guard let merged = composite(
+            subImages: subImages,
+            selectionRect: rect,
+            canvasSize: canvasSize,
+            scale: maxScale
+        ) else {
+            throw ScreenCaptureError.captureFailed("跨屏图像合成失败")
+        }
+        let png = try pngData(of: merged)
+        return CapturedImage(
+            image: merged,
+            pngData: png,
+            pointSize: rect.size,
+            pixelSize: canvasSize
+        )
+    }
+
+    /// ScreenCaptureKit 整屏抓取（原生像素分辨率）。
+    private func captureFullScreenImage(
         screen: ScreenInfo,
-        localRect: CGRect,
         excludingWindowIDs: [CGWindowID]
     ) async throws -> CGImage {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
@@ -181,25 +269,46 @@ public final class ScreenCaptureService {
         configuration.width = output.width
         configuration.height = output.height
         configuration.captureResolution = .best
-        let fullImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+        return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+    }
 
-        // 按实际输出像素换算裁剪矩形（不信任整数 backingScale，避免 HiDPI 精度差异）
-        let scaleX = CGFloat(fullImage.width) / screen.frame.width
-        let scaleY = CGFloat(fullImage.height) / screen.frame.height
+    /// 按屏幕实际输出像素比从整屏图像中裁剪局部区域。
+    private static func cropFullImage(
+        _ fullImage: CGImage,
+        screenFrame: CGRect,
+        displayID: CGDirectDisplayID,
+        localRect: CGRect
+    ) throws -> CGImage {
+        let scaleX = CGFloat(fullImage.width) / screenFrame.width
+        let scaleY = CGFloat(fullImage.height) / screenFrame.height
         // 本地坐标 y 轴向上、图像 y 轴向下：先翻到左上原点再换算像素
         let topLeftLocal = CGRect(
             x: localRect.minX,
-            y: screen.frame.height - localRect.maxY,
+            y: screenFrame.height - localRect.maxY,
             width: localRect.width,
             height: localRect.height
         )
         var cropRect = ScreenGeometry.pixelRect(for: topLeftLocal, scale: max(scaleX, scaleY))
-        // 夹回图像边界，保证裁剪矩形有效
         cropRect = cropRect.intersection(CGRect(x: 0, y: 0, width: fullImage.width, height: fullImage.height))
         guard cropRect.width >= 1, cropRect.height >= 1, let cropped = fullImage.cropping(to: cropRect) else {
-            throw ScreenCaptureError.captureFailed("显示 \(screen.displayID) 裁剪区域无效")
+            throw ScreenCaptureError.captureFailed("显示 \(displayID) 裁剪区域无效")
         }
         return cropped
+    }
+
+    /// ScreenCaptureKit 主路径：SCShareableContent 取显示器，SCScreenshotManager 整屏捕获后裁剪。
+    private func captureScreenKit(
+        screen: ScreenInfo,
+        localRect: CGRect,
+        excludingWindowIDs: [CGWindowID]
+    ) async throws -> CGImage {
+        let fullImage = try await captureFullScreenImage(screen: screen, excludingWindowIDs: excludingWindowIDs)
+        return try Self.cropFullImage(
+            fullImage,
+            screenFrame: screen.frame,
+            displayID: screen.displayID,
+            localRect: localRect
+        )
     }
 
     /// 回退路径：整屏捕获或裁剪失败时，改用矩形便利接口一次捕获该区域。

@@ -21,7 +21,7 @@
 | --- | --- |
 | 工程交接 | `PROJECT_MEMORY.md` |
 | 文档导航 | `docs/README.md` |
-| 打包并替换当前 App | `./Scripts/reload-app.sh`（skill：`.cursor/skills/reload-onebox`） |
+| 打包并替换当前 App | `./Scripts/reload-app.sh`（skill：`.cursor/skills/reload-onebox`；Agent Shell 须 `required_permissions: ["all"]`） |
 | 仅打包 | `./Scripts/package-app.sh` |
 | 非 UI 模块测试 | `./Scripts/run-tests.sh` |
 | 图标资源 | `./Scripts/gen-icon.sh` |

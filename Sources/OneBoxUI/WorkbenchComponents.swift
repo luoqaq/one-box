@@ -17,7 +17,6 @@ public struct ToolWorkbenchShell<Content: View>: View {
             .frame(minWidth: 920, minHeight: 600)
             .background(GlassPanelBackground())
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .preferredColorScheme(.light)
             .tint(OB.accent)
     }
 }
@@ -158,21 +157,25 @@ public struct SettingsRow<Trailing: View>: View {
     }
 
     public var body: some View {
-        HStack(alignment: .center, spacing: 16) {
+        HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundColor(OB.ink)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(1)
                 Text(desc)
                     .font(.system(size: 11.5))
                     .foregroundColor(OB.ink3)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
             }
-            Spacer(minLength: 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            // 右侧控件优先保宽，避免把左侧文案挤成碎行。
             trailing()
+                .fixedSize(horizontal: true, vertical: false)
+                .layoutPriority(1)
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .frame(minHeight: 48, alignment: .center)
         .overlay(alignment: .bottom) { Divider().overlay(OB.hairline) }
@@ -353,13 +356,23 @@ public struct HotkeyButton: View {
 
 public struct PathChip: View {
     let path: String
+    /// 窄栏时限制芯片宽度，中间省略，避免整行被路径撑换行。
+    var maxWidth: CGFloat? = 168
+
+    public init(path: String, maxWidth: CGFloat? = 168) {
+        self.path = path
+        self.maxWidth = maxWidth
+    }
 
     public var body: some View {
         Text(path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
-            .font(.system(size: 11.5).monospaced())
+            .font(.system(size: 11).monospaced())
             .foregroundColor(OB.ink2)
-            .padding(.horizontal, 9)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .padding(.horizontal, 8)
             .frame(height: 28)
+            .frame(maxWidth: maxWidth, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
                     .fill(OB.surfaceSubtle)

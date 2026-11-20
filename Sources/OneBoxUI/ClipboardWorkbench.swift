@@ -22,6 +22,7 @@ public struct ClipboardWorkbenchView: View {
     @State private var filter: ClipboardRecordFilter = .all
     @State private var selectedID: UUID?
     @State private var showClearConfirm = false
+    @State private var keyboardMonitor: Any?
     public init(
         model: AppModel,
         onBack: @escaping () -> Void,
@@ -71,6 +72,13 @@ public struct ClipboardWorkbenchView: View {
         .onAppear {
             subView = initialSubView
             model.reloadClipboardRecords()
+            installKeyboardMonitor()
+        }
+        .onDisappear {
+            if let monitor = keyboardMonitor {
+                NSEvent.removeMonitor(monitor)
+                keyboardMonitor = nil
+            }
         }
         .overlay {
             if showClearConfirm {
@@ -126,36 +134,46 @@ public struct ClipboardWorkbenchView: View {
     }
 
     private var historyList: some View {
-        ScrollView {
-            LazyVStack(spacing: 2) {
-                if records.isEmpty {
-                    VStack(spacing: 14) {
-                        EmptyBoxView(
-                            icon: .clipboard,
-                            title: "还没有剪贴板记录",
-                            message: "在任意应用中复制文本或图片，1 秒内自动出现在这里。"
-                        )
-                        HStack(spacing: 8) {
-                            OBButton(title: "试试区域截图", style: .primary, action: onOpenCapture)
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 2) {
+                    if records.isEmpty {
+                        VStack(spacing: 14) {
+                            EmptyBoxView(
+                                icon: .clipboard,
+                                title: "还没有剪贴板记录",
+                                message: "在任意应用中复制文本或图片，1 秒内自动出现在这里。"
+                            )
+                            HStack(spacing: 8) {
+                                OBButton(title: "试试区域截图", style: .primary, action: onOpenCapture)
+                            }
+                        }
+                        .padding(.top, 60)
+                        .padding(.horizontal, 16)
+                    } else {
+                        ForEach(records) { record in
+                            ClipRowView(
+                                record: record,
+                                isSelected: selected?.id == record.id,
+                                onSelect: { selectedID = record.id },
+                                onQuickCopy: {
+                                    model.clipboardService.reuse(record)
+                                    model.showToast("已复制到剪贴板")
+                                }
+                            )
+                            .id(record.id)
                         }
                     }
-                    .padding(.top, 60)
-                    .padding(.horizontal, 16)
-                } else {
-                    ForEach(records) { record in
-                        ClipRowView(
-                            record: record,
-                            isSelected: selected?.id == record.id,
-                            onSelect: { selectedID = record.id },
-                            onQuickCopy: {
-                                model.clipboardService.reuse(record)
-                                model.showToast("已复制到剪贴板")
-                            }
-                        )
+                }
+                .padding(8)
+            }
+            .onChange(of: selectedID) { _, newID in
+                if let newID {
+                    withAnimation(.easeInOut(duration: 0.12)) {
+                        proxy.scrollTo(newID, anchor: .center)
                     }
                 }
             }
-            .padding(8)
         }
         .frame(width: 332)
         .overlay(alignment: .trailing) { Divider().overlay(OB.hairline) }
@@ -212,7 +230,7 @@ public struct ClipboardWorkbenchView: View {
         }
         .padding(EdgeInsets(top: 18, leading: 20, bottom: 16, trailing: 20))
         .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(Color.white.opacity(0.30))
+        .background(OB.contentBg)
     }
 
     private var footer: some View {
@@ -241,7 +259,7 @@ public struct ClipboardWorkbenchView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("剪贴板历史 · 工具配置")
                             .font(.system(size: 16, weight: .semibold))
-                        Text("工具专属设置，停用后立即停止轮询并释放内存缓存")
+                        Text("配置自动记录、保留上限与呼出快捷键")
                             .font(.system(size: 12))
                             .foregroundColor(OB.ink3)
                     }
@@ -253,11 +271,6 @@ public struct ClipboardWorkbenchView: View {
                 .padding(.bottom, 14)
 
                 SettingsCard {
-                    SettingsRow(title: "启用剪贴板历史模块", desc: "关闭后卸载监听线程并清空内存缓存，仅保留磁盘历史") {
-                        OBToggle(isOn: model.registry.isEnabled("clipboard")) {
-                            model.registry.toggleEnabled("clipboard")
-                        }
-                    }
                     SettingsRow(title: "自动监听系统剪贴板", desc: "检测文本与 PNG/TIFF 图片变化") {
                         OBToggle(isOn: !model.clipboardService.isRecordingPaused) {
                             let paused = model.clipboardService.setRecordingPaused(!model.clipboardService.isRecordingPaused)
@@ -351,6 +364,49 @@ public struct ClipboardWorkbenchView: View {
             try? await store.setPinned(id: id, !record.pinned)
             model.reloadClipboardRecords()
         }
+    }
+
+    private func installKeyboardMonitor() {
+        keyboardMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard subView == .main, !showClearConfirm else { return event }
+            guard event.window == NSApp.keyWindow else { return event }
+
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            let isEditingText = NSApp.keyWindow?.firstResponder is NSTextView
+
+            switch event.specialKey {
+            case .downArrow:
+                if !flags.contains(.command) {
+                    moveSelection(1)
+                    return nil
+                }
+            case .upArrow:
+                if !flags.contains(.command) {
+                    moveSelection(-1)
+                    return nil
+                }
+            case .carriageReturn:
+                if flags.contains(.command) || !isEditingText {
+                    if let record = selected {
+                        model.clipboardService.reuse(record)
+                        model.showToast("已复制到剪贴板")
+                        return nil
+                    }
+                }
+            default:
+                break
+            }
+            return event
+        }
+    }
+
+    private func moveSelection(_ delta: Int) {
+        let list = records
+        guard !list.isEmpty else { return }
+        let currentID = selected?.id
+        let idx = currentID.flatMap { id in list.firstIndex(where: { $0.id == id }) } ?? -1
+        let next = list[(idx + delta + list.count) % list.count]
+        selectedID = next.id
     }
 
     @ViewBuilder
@@ -477,10 +533,10 @@ struct ClipRowView: View {
     @State private var isHovering = false
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .center, spacing: 10) {
             thumb
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 5) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
                     if record.pinned {
                         StatusDot(standby: true)
                     }
@@ -488,36 +544,32 @@ struct ClipRowView: View {
                         .font(.system(size: 13, weight: .medium))
                         .foregroundColor(isSelected ? OB.accentInk : OB.ink)
                         .lineLimit(1)
-                }
-                Text(excerpt)
-                    .font(.system(size: 11.5))
-                    .foregroundColor(OB.ink2)
-                    .lineLimit(1)
-                HStack(spacing: 5) {
-                    Text(record.kind == .image ? "图片" : "文本")
+                    Spacer(minLength: 4)
+                    Text(OBTimeFormat.short(record.lastUsedAt))
                         .font(.system(size: 11))
                         .foregroundColor(OB.ink3)
+                        .monospacedDigit()
                 }
-            }
-            Spacer(minLength: 0)
-            VStack(alignment: .trailing, spacing: 6) {
-                Text(OBTimeFormat.short(record.lastUsedAt))
-                    .font(.system(size: 11))
-                    .foregroundColor(OB.ink3)
-                    .monospacedDigit()
-                if isHovering || isSelected {
-                    Button(action: onQuickCopy) {
-                        OBIcon(.copy, size: 13, weight: 1.65)
-                            .foregroundColor(OB.ink2)
-                            .frame(width: 24, height: 24)
-                            .background(
-                                RoundedRectangle(cornerRadius: 6)
-                                    .fill(Color.white.opacity(0.75))
-                            )
-                            .contentShape(Rectangle())
+                HStack(spacing: 6) {
+                    Text(excerpt)
+                        .font(.system(size: 11.5))
+                        .foregroundColor(OB.ink2)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    if isHovering || isSelected {
+                        Button(action: onQuickCopy) {
+                            OBIcon(.copy, size: 12.5, weight: 1.65)
+                                .foregroundColor(OB.ink2)
+                                .frame(width: 22, height: 22)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .fill(OB.cardSurface)
+                                )
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help("快速复制")
                     }
-                    .buttonStyle(.plain)
-                    .help("快速复制")
                 }
             }
         }
@@ -575,7 +627,7 @@ struct ClipRowView: View {
 
     private var title: String {
         if record.kind == .image {
-            return "\(record.imageWidth ?? 0) × \(record.imageHeight ?? 0) · PNG · \(OBFormat.bytes(record.byteCount))"
+            return "图片 · \(record.imageWidth ?? 0) × \(record.imageHeight ?? 0)"
         }
         let text = record.textContent ?? ""
         return text.split(separator: "\n").first.map(String.init) ?? "文本"
@@ -583,7 +635,7 @@ struct ClipRowView: View {
 
     private var excerpt: String {
         if record.kind == .image {
-            return "PNG 图片 · \(OBFormat.bytes(record.byteCount))"
+            return "PNG 图像 · \(OBFormat.bytes(record.byteCount))"
         }
         let text = (record.textContent ?? "")
             .replacingOccurrences(of: "\n", with: " ")

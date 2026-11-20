@@ -24,7 +24,6 @@ public struct LauncherView: View {
 
     @State private var searchText = ""
     @State private var filter: LauncherFilter = .all
-    @State private var sortMode: LauncherSortMode = .pinned
     @State private var selectedID: String?
     @State private var toast: String?
     @FocusState private var searchFocused: Bool
@@ -53,7 +52,7 @@ public struct LauncherView: View {
         registry.filteredTools(
             filter: filter,
             search: searchText,
-            sortMode: sortMode,
+            sortMode: .pinned,
             showInactive: OBLauncherPreferences.showInactiveTools
         )
     }
@@ -65,7 +64,6 @@ public struct LauncherView: View {
     public var body: some View {
         VStack(spacing: 0) {
             searchBar
-            filterBar
             toolList
             footer
         }
@@ -83,7 +81,6 @@ public struct LauncherView: View {
                 keyboardMonitor = nil
             }
         }
-        .preferredColorScheme(.light)
         .tint(OB.accent)
     }
 
@@ -97,14 +94,14 @@ public struct LauncherView: View {
                 OBIcon(.search, size: 18, weight: 1.65)
                     .foregroundColor(OB.ink3)
                     .allowsHitTesting(false)
-                TextField("搜索工具、拼音简拼（jtb / jt）或关键词…", text: $searchText)
+                TextField("搜索工具或拼音简拼（jtb / jt / qs）…", text: $searchText)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 15, weight: .regular))
+                    .font(.system(size: 14.5, weight: .regular))
                     .focused($searchFocused)
                     .onSubmit { openSelected() }
                 HStack(spacing: 6) {
-                    Kbd(text: "⌘K").allowsHitTesting(false)
-                    LauncherIconButton(icon: .gear, title: "全局设置与工具管理") { onOpenSettings(.plugins) }
+                    filterSegmented
+                    LauncherIconButton(icon: .gear, title: "偏好设置 (⌘,)") { onOpenSettings(.general) }
                 }
             }
             .padding(.horizontal, 16)
@@ -113,50 +110,16 @@ public struct LauncherView: View {
         .overlay(alignment: .bottom) { Divider().overlay(OB.hairline) }
     }
 
-    // MARK: 过滤栏（38pt）
-
-    private var filterBar: some View {
-        ZStack {
-            OB.glassBar2.allowsHitTesting(false)
-            WindowDragRegion()
-            HStack {
-                HStack(spacing: 2) {
-                    ForEach(LauncherFilter.allCases, id: \.self) { f in
-                        pill(f.title, active: filter == f) {
-                            filter = f
-                        }
-                    }
-                }
-                Spacer(minLength: 0).allowsHitTesting(false)
-                HStack(spacing: 6) {
-                    Button {
-                        sortMode = sortMode == .pinned ? .frequent : .pinned
-                    } label: {
-                        HStack(spacing: 4) {
-                            OBIcon(.refresh, size: 12, weight: 1.65)
-                                .opacity(0.75)
-                            Text(sortMode.title)
-                                .font(.system(size: 11.5, weight: .medium))
-                        }
-                        .foregroundColor(OB.ink2)
-                        .padding(.horizontal, 8)
-                        .frame(height: 25)
-                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    Text("\(registry.enabledCount) 启用 · \(registry.disabledCount) 待机")
-                        .font(.system(size: 11))
-                        .foregroundColor(OB.ink3)
-                        .monospacedDigit()
-                        .padding(.trailing, 4)
-                        .allowsHitTesting(false)
-                }
-            }
-            .padding(.horizontal, 12)
+    private var filterSegmented: some View {
+        HStack(spacing: 2) {
+            pill("全部", active: filter == .all) { filter = .all }
+            pill("置顶", active: filter == .pinned) { filter = .pinned }
         }
-        .frame(height: 38)
-        .overlay(alignment: .bottom) { Divider().overlay(OB.hairline) }
+        .padding(2)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(OB.surfaceHover)
+        )
     }
 
     private func pill(_ title: String, active: Bool, action: @escaping () -> Void) -> some View {
@@ -165,10 +128,10 @@ public struct LauncherView: View {
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(active ? OB.ink : OB.ink2)
                 .padding(.horizontal, 10)
-                .frame(height: 25)
+                .frame(height: 24)
                 .background(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(active ? Color.white.opacity(0.85) : Color.clear)
+                        .fill(active ? OB.segActiveSurface : Color.clear)
                         .shadow(color: active ? OB.hairline : .clear, radius: 1, x: 0, y: 1)
                 )
         }
@@ -186,7 +149,7 @@ public struct LauncherView: View {
                 let planned = items.filter { registry.availability(of: $0) == .planned }
 
                 if !pinned.isEmpty {
-                    groupLabel("已置顶", trailing: "可拖拽或 ↑↓ 排序")
+                    groupLabel("已置顶", trailing: "拖拽可调整顺序")
                     ForEach(pinned) { tool in
                         row(tool)
                     }
@@ -198,7 +161,7 @@ public struct LauncherView: View {
                     }
                 }
                 if !disabled.isEmpty {
-                    groupLabel("已内置 · 未启用（0 内存）", trailing: "\(disabled.count)", topPadding: 6)
+                    groupLabel("未启用（不占后台资源）", trailing: "\(disabled.count)", topPadding: 6)
                     ForEach(disabled) { tool in
                         row(tool)
                     }
@@ -273,7 +236,7 @@ public struct LauncherView: View {
             onToggleEnabled: {
                 onToggleEnabled(tool.id)
                 let enabled = registry.isEnabled(tool.id)
-                showToast(enabled ? "已启用「\(tool.name)」" : "已停用「\(tool.name)」，运行时内存已释放")
+                showToast(enabled ? "已启用「\(tool.name)」" : "已停用「\(tool.name)」")
             },
             onQuickAction: { dest in onQuickAction(dest) }
         )
@@ -283,7 +246,7 @@ public struct LauncherView: View {
         guard tool.isInstalled else { return }
         if !registry.isEnabled(tool.id) {
             onToggleEnabled(tool.id)
-            showToast("已按需加载「\(tool.name)」")
+            showToast("已启用「\(tool.name)」")
         }
         registry.registerUse(tool.id)
         if let dest = tool.destination {
@@ -308,11 +271,12 @@ public struct LauncherView: View {
             OB.glassFooter.allowsHitTesting(false)
             WindowDragRegion()
             HStack {
-                Text("单击整行直达 · 拖拽或点 ↑↓ 调整置顶顺序")
+                Text("单击打开工具 · 右键更多操作")
                 Spacer(minLength: 0)
                 HStack(spacing: 12) {
                     hint("↑↓", "选择")
                     hint("↵", "打开")
+                    hint("⌘,", "设置")
                 }
             }
             .font(.system(size: 11.5))
@@ -340,9 +304,15 @@ public struct LauncherView: View {
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             let hasCommand = flags.contains(.command)
 
-            if hasCommand, let key = event.charactersIgnoringModifiers, key.lowercased() == "k" {
-                searchFocused = true
-                return nil
+            if hasCommand, let key = event.charactersIgnoringModifiers {
+                if key.lowercased() == "k" {
+                    searchFocused = true
+                    return nil
+                }
+                if key == "," {
+                    onOpenSettings(.general)
+                    return nil
+                }
             }
             guard !hasCommand else { return event }
             switch event.specialKey {
@@ -489,13 +459,23 @@ struct ToolRowView: View {
                 )
                 .shadow(color: fgColor.opacity(0.08), radius: 2, x: 0, y: 1)
 
-            // 名称 + 热键提示（替代原描述文案）
+            // 名称 + 置顶胶囊 + 描述
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(tool.name)
                         .font(.system(size: 13.5, weight: .medium))
                         .foregroundColor(isSelected ? OB.accentInk : OB.ink)
-                    if availability == .disabled {
+                    if state.pinned, availability == .enabled {
+                        Text("置顶")
+                            .font(.system(size: 10.5, weight: .medium))
+                            .foregroundColor(OB.brandYellowInk)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 1.5)
+                            .background(
+                                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                    .fill(OB.brandYellowSoft)
+                            )
+                    } else if availability == .disabled {
                         Text("· 未启用")
                             .font(.system(size: 10.5, weight: .medium))
                             .foregroundColor(OB.ink3)
@@ -505,16 +485,23 @@ struct ToolRowView: View {
                             .foregroundColor(OB.ink3)
                     }
                 }
-                subtitleHint
+                Text(availability == .planned ? "后续版本扩展" : tool.desc)
+                    .font(.system(size: 11.5))
+                    .foregroundColor(OB.ink3)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            // 右侧操作：快捷动作 / 悬停操作，设置齿轮始终在最右
+            // 右侧操作：悬停置顶钉 / 快捷动作 / 全局热键 / 设置齿轮
             HStack(spacing: 6) {
-                if isHovering || isSelected {
-                    hoverActions
+                if isHovering || isSelected, tool.isInstalled, availability != .planned {
+                    miniAction(.pin, title: state.pinned ? "取消置顶" : "置顶", filled: state.pinned) { onPin() }
                 }
                 trailingActions
+                if let globalHotkey, globalHotkey != "—", !globalHotkey.isEmpty {
+                    Kbd(text: globalHotkey)
+                }
                 if tool.isInstalled, availability != .planned {
                     miniAction(.gear, title: "打开工具配置") { onConfig() }
                 }
@@ -530,6 +517,18 @@ struct ToolRowView: View {
         .onTapGesture {
             guard tool.isInstalled, availability != .planned else { return }
             onOpen()
+        }
+        .contextMenu {
+            if tool.isInstalled, availability != .planned {
+                Button(state.pinned ? "取消置顶" : "置顶") { onPin() }
+                if state.pinned {
+                    Button("上移") { onMoveUp() }
+                    Button("下移") { onMoveDown() }
+                }
+                Divider()
+                Button("打开设置") { onConfig() }
+                Button(state.enabled ? "停用" : "启用") { onToggleEnabled() }
+            }
         }
         .onHover { hovering in
             isHovering = hovering
@@ -573,56 +572,6 @@ struct ToolRowView: View {
                 active ? OB.accentSoft
                 : (isHovering && tool.isInstalled && availability != .planned ? OB.surfaceSubtle : Color.clear)
             )
-    }
-
-    @ViewBuilder
-    private var hoverActions: some View {
-        HStack(spacing: 2) {
-            if tool.isInstalled {
-                if state.pinned {
-                    miniAction(.chevronUp, title: "上移排序") { onMoveUp() }
-                    miniAction(.chevronDown, title: "下移排序") { onMoveDown() }
-                }
-                miniAction(.pin, title: state.pinned ? "取消置顶" : "置顶", filled: state.pinned) { onPin() }
-                miniAction(.power, title: state.enabled ? "停用释放内存" : "启用") { onToggleEnabled() }
-            }
-        }
-    }
-
-    /// 标题下提示：有全局热键时说明「按什么键能干什么」；否则回退短状态文案。
-    @ViewBuilder
-    private var subtitleHint: some View {
-        if let globalHotkey, globalHotkey != "—", !globalHotkey.isEmpty, let action = hotkeyActionHint {
-            HStack(spacing: 6) {
-                Kbd(text: globalHotkey)
-                Text(action)
-                    .font(.system(size: 11.5))
-                    .foregroundColor(OB.ink3)
-                    .lineLimit(1)
-            }
-        } else {
-            Text(fallbackSubtitle)
-                .font(.system(size: 11.5))
-                .foregroundColor(OB.ink3)
-                .lineLimit(1)
-                .truncationMode(.tail)
-        }
-    }
-
-    /// 各工具热键动作说明（比通用 desc 更直接）。
-    private var hotkeyActionHint: String? {
-        switch tool.id {
-        case "clipboard": return "快速打开粘贴历史"
-        case "screenshots": return "快速截图"
-        case "color-picker": return "快速取色"
-        default: return nil
-        }
-    }
-
-    private var fallbackSubtitle: String {
-        if availability == .planned { return "后续版本扩展" }
-        if availability == .disabled { return "启用后可在此使用" }
-        return tool.desc
     }
 
     @ViewBuilder
