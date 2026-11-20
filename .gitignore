@@ -4,5 +4,9 @@
 DerivedData/
 Scripts/build/
 
-# Logo 探索中间稿（正式资源在 Resources/）
-prototypes/logo-exploration/
+# 本地 / Agent 上下文（不随开源仓库公开）
+AGENTS.md
+PROJECT_MEMORY.md
+.cursor/
+docs/
+prototypes/

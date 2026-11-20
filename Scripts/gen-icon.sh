@@ -1,11 +1,12 @@
 #!/bin/bash
-# 从 logo 走查方案 A 生成 Dock AppIcon.icns + 菜单栏模板图。
+# 从 Resources/icon-source 的 SVG 生成 Dock AppIcon.icns + 菜单栏模板图。
+# 正式产物已提交在 Resources/；本脚本供维护者本地改图标时使用。
 # 依赖：rsvg-convert（brew install librsvg）、iconutil、sips
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SVG_APP="$REPO_ROOT/prototypes/logo-exploration/assets/icon-a.svg"
-SVG_MENU="$REPO_ROOT/prototypes/logo-exploration/assets/menubar-a.svg"
+SVG_APP="$REPO_ROOT/Resources/icon-source/icon.svg"
+SVG_MENU="$REPO_ROOT/Resources/icon-source/menubar.svg"
 ICONSET="$REPO_ROOT/Resources/AppIcon.iconset"
 ICNS="$REPO_ROOT/Resources/AppIcon.icns"
 MENU_DIR="$REPO_ROOT/Resources"

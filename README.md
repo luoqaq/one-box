@@ -9,32 +9,28 @@ macOS 菜单栏工具箱。本机运行，数据不上云。
 - **截图与标注**：区域截图，箭头/文字/矩形/打码，复制或保存；⌃⌥⇧4
 - **屏幕取色器**：吸取色值（HEX / RGB / OKLCH）；⌃⌥C（默认关闭，可在工具箱启用）
 
-平台：macOS 15.2+。技术栈：SwiftPM + SwiftUI/AppKit + ScreenCaptureKit。
+要求：macOS 15.2+。技术栈：SwiftPM + SwiftUI/AppKit + ScreenCaptureKit。
 
-## 开发
+## 构建与运行
 
 ```bash
-# 构建（CLT + MacOSX15.2 SDK；脚本已封装）
 ./Scripts/package-app.sh
 open Scripts/build/OneBox.app
-
-# 打包并替换当前正在运行的 OneBox（开发收尾默认）
-./Scripts/reload-app.sh
-
-# 非 UI 模块测试
-./Scripts/run-tests.sh
-
-# 图标：方案 A SVG → icns + 菜单栏模板
-./Scripts/gen-icon.sh
 ```
 
-Agent 收尾：改完 UI/原生后跑 `.cursor/skills/reload-onebox`（即 `reload-app.sh`），不要让用户手动退出再开。
+常用脚本：
 
-## 文档与上下文
+```bash
+./Scripts/reload-app.sh   # 打包并替换当前正在运行的 OneBox
+./Scripts/run-tests.sh    # 非 UI 模块测试
+```
 
-| 入口 | 说明 |
-| --- | --- |
-| [AGENTS.md](AGENTS.md) | 开发规则与构建约束 |
-| [PROJECT_MEMORY.md](PROJECT_MEMORY.md) | 当前能力与模块交接 |
-| [docs/README.md](docs/README.md) | 方案/调研文档索引 |
-| [prototypes/v1-module-details/](prototypes/v1-module-details/) | 早期交互原型（参考用） |
+图标已在 `Resources/`。首次签名会由 `Scripts/ensure-codesign-identity.sh` 在本机创建「OneBox Local」身份（仅本地开发用）。
+
+## 贡献
+
+欢迎 Issue 与 PR。请保持改动聚焦；涉及 UI / 原生行为时，用 `./Scripts/reload-app.sh` 在真机验证后再提交。
+
+## 许可
+
+[MIT](LICENSE)
